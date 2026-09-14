@@ -48,7 +48,7 @@ export const events = [
     id: 6,
     title: "Graduate Projects Showcase",
     date: "2026",
-    image: "/events/kidss.png",
+    image: "/projects/1.png",
     description:
       "A showcase highlighting innovative projects and practical solutions developed through academic and engineering activities.",
   },
