@@ -45,15 +45,6 @@ export const events = [
   },
 
   {
-    id: 6,
-    title: "Graduate Projects Showcase",
-    date: "2026",
-    image: "/projects/3.png",
-    description:
-      "A showcase highlighting innovative projects and practical solutions developed through academic and engineering activities.",
-  },
-
-  {
     id: 7,
     title: "Artificial Intelligence Event",
     date: "2026",
