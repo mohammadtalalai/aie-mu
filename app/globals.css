@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+/* Enables class-based dark mode: add/remove `dark` on <html> */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* =====================================================
+   UNIFIED COLOR SYSTEM
+   One palette (navy + gold), two modes.
+   Every component should read colors from these
+   variables instead of hardcoding hex values, so the
+   whole site — not just one page — switches together.
+===================================================== */
+
+:root {
+  /* Tells the browser to render native form controls (inputs, textareas,
+     date pickers, checkboxes, scrollbars in Firefox/Safari) using the
+     LIGHT palette — regardless of the device's own OS-level dark mode
+     setting. Without this, native controls follow the OS preference
+     instead of the site's own toggle, which is what was breaking
+     inputs/textareas on form-heavy pages like Project Registration. */
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg: #f7f7f5;
+  --bg-soft: #eef1f6;
+  --surface: #ffffff;
+  --surface-soft: rgba(6, 38, 91, 0.04);
+  --surface-hover: rgba(6, 38, 91, 0.06);
+
+  /* Borders */
+  --border: rgba(6, 38, 91, 0.1);
+  --border-strong: rgba(6, 38, 91, 0.18);
+
+  /* Text */
+  --fg: #031a3d;
+  --fg-secondary: #172033;
+  --fg-muted: #64748b;
+  --fg-subtle: #94a3b8;
+  --fg-on-dark-surface: #ffffff;
+
+  /* Brand — navy */
+  --navy-dark: #031a3d;
+  --navy: #06265b;
+  --navy-light: #0b3a78;
+
+  /* Brand — gold */
+  --gold: #b88a2b;
+  --gold-light: #d4af5a;
+  --gold-soft: rgba(184, 138, 43, 0.1);
+  --on-gold: #06265b;
+
+  /* Misc */
+  --grid-line: rgba(6, 38, 91, 0.045);
+  --shadow-color: rgba(6, 38, 91, 0.12);
+  --scrollbar-track: #f1f1ef;
+  --overlay-fade: linear-gradient(
+    to top,
+    var(--bg),
+    rgba(247, 247, 245, 0.2),
+    transparent
+  );
+}
+
+.dark {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg: #050816;
+  --bg-soft: #080c1c;
+  --surface: #0b1220;
+  --surface-soft: rgba(255, 255, 255, 0.03);
+  --surface-hover: rgba(255, 255, 255, 0.06);
+
+  /* Borders */
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  /* Text */
+  --fg: #ffffff;
+  --fg-secondary: #e2e8f0;
+  --fg-muted: #94a3b8;
+  --fg-subtle: #64748b;
+  --fg-on-dark-surface: #ffffff;
+
+  /* Brand — navy (lightened so it still reads on a dark bg) */
+  --navy-dark: #020a1a;
+  --navy: #0b3a78;
+  --navy-light: #1e4d8f;
+
+  /* Brand — gold */
+  --gold: #c89b3c;
+  --gold-light: #e2c06b;
+  --gold-soft: rgba(200, 155, 60, 0.08);
+  --on-gold: #050816;
+
+  /* Misc */
+  --grid-line: rgba(255, 255, 255, 0.025);
+  --shadow-color: rgba(0, 0, 0, 0.45);
+  --scrollbar-track: #0b1220;
+  --overlay-fade: linear-gradient(
+    to top,
+    var(--bg),
+    rgba(5, 8, 22, 0.2),
+    transparent
+  );
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg-secondary);
+  font-family: Arial, Helvetica, sans-serif;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+::selection {
+  background: var(--gold);
+  color: var(--on-gold);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--navy);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gold);
+}
+
+a {
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+img {
+  max-width: 100%;
+}
+
+/* Chrome/Edge autofill forces its own white/yellow background regardless
+   of theme — this repaints it using our own surface + text colors so
+   autofilled fields (e.g. the Contact form, Project Registration) stay
+   readable in both light and dark mode. */
+input:-webkit-autofill,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--fg);
+  -webkit-box-shadow: 0 0 0px 1000px var(--surface-soft) inset;
+  box-shadow: 0 0 0px 1000px var(--surface-soft) inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
