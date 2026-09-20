@@ -49,6 +49,13 @@ export default function Footer() {
               </Link>
 
               <Link
+                href="/program-guide"
+                className="transition hover:text-[var(--gold)]"
+              >
+                Program Guide
+              </Link>
+
+              <Link
                 href="/projects"
                 className="transition hover:text-[var(--gold)]"
               >

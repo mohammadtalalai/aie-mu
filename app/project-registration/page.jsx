@@ -72,16 +72,57 @@ const SW_CATS = [
 const HARDWARE_HINT =
   "e.g. Development Hardware — Personal Computer or Laptop\nMinimum specifications:\nCPU: Intel Core i5 or higher\nRAM: 8 GB minimum\nStorage: 256 GB SSD minimum";
 
-const MAX_TEAM = 11;
+const MAX_TEAM = 8;
 const DEFAULT_TEAM_ROWS = 5;
 
-// Registration eligibility rules — minimum completed credit hours required
-// to register each project.
+// Registration eligibility rules:
+// - `hours` is the normal minimum completed credit hours required.
+// - `grace` is how many hours BELOW that minimum are still tolerated, but
+//   only through a manual/paper registration at the department (not
+//   through this online form) — see findEligibility() below.
 const PROJECT_OPTIONS = [
-  { id: 1, label: "مشروع 1", hours: 96 },
-  { id: 2, label: "مشروع 2", hours: 116 },
-  { id: 3, label: "مشروع 3", hours: 130 },
+  { id: 1, label: "مشروع 1", hours: 96, grace: 4 },
+  { id: 2, label: "مشروع 2", hours: 116, grace: 4 },
+  { id: 3, label: "مشروع 3", hours: 130, grace: 6 },
 ];
+
+// Word-count limits. Abstract is meant to fill roughly half a page to a
+// full page of the template (~150–300 words at standard A4/Arial sizing);
+// the three short-answer fields are meant to stay to a tight paragraph.
+const ABSTRACT_MIN_WORDS = 150;
+const ABSTRACT_MAX_WORDS = 300;
+const GOAL_MAX_WORDS = 60;
+const AI_LINK_MAX_WORDS = 60;
+const COMMUNITY_MAX_WORDS = 60;
+
+const KEYWORD_OPTIONS = [
+  "Machine Learning",
+  "Deep Learning",
+  "Natural Language Processing",
+  "Computer Vision",
+  "Generative AI",
+  "Large Language Models",
+  "Reinforcement Learning",
+  "Data Science",
+  "Big Data",
+  "Robotics",
+  "Internet of Things (IoT)",
+  "Embedded Systems",
+  "Cloud Computing",
+  "Cybersecurity",
+  "Blockchain",
+  "Speech Recognition",
+  "Recommendation Systems",
+  "Computer Networks",
+  "Database Systems",
+  "Web Development",
+  "Mobile Applications",
+  "Software Engineering",
+];
+
+function countWords(str) {
+  return (str || "").trim().split(/\s+/).filter(Boolean).length;
+}
 
 /* Note: this page just downloads the filled PDF directly — nothing is
    stored or shown on the site. */
@@ -120,7 +161,21 @@ function pdfFoot(n) {
     <b>رؤية البرنامج:</b> الوصول الى مرتبة الإبداع والريادة محلياً وإقليمياً في مجال هندسة الذكاء الاصطناعي وتطبيقاته.<br/>
     <b>رسالة البرنامج:</b> "اعداد مهندس متميز في مجال هندسة الذكاء الاصطناعي وتطبيقاته، وتكوين كوادر هندسية مؤهلة علمياً ومهنياً قادرة على المنافسة في كبرى المؤسسات التي يعتمد مجال عملها على التكنولوجيا المتطورة، خدمة للمجتمع وتنمية البيئة."
     <div class="links"><span>Website: facebook.com/groups/aiefemu</span><span>Email: aie@mans.edu.eg</span></div>
-    <div class="pagenum">Page ${n} of 5</div>
+    <div class="pagenum">Page ${n} of 6</div>
+  </div>`;
+}
+
+// A boxed section styled exactly like the Abstract box (gray header bar +
+// padded, justified body) — reused for Goal / AI-link / Community-service
+// so they all look consistent instead of a plain heading + paragraph.
+function boxedSection(title, text, { rtl = true } = {}) {
+  const paragraphs = (text || "")
+    .split(/\n{2,}/)
+    .map((p) => `<p>${esc(p)}</p>`)
+    .join("");
+  return `<div class="abs-box" style="margin-bottom:16px;">
+    <div class="abs-h">${title}</div>
+    <div class="abs-body${rtl ? " arb" : ""}" style="text-align:${rtl ? "right" : "justify"};">${paragraphs}</div>
   </div>`;
 }
 
@@ -166,9 +221,37 @@ function renderPdfPages(refs, data) {
 
     <p class="sec-h">Project Team</p>
     <table dir="rtl"><thead><tr><th style="width:36px;">م</th><th>الاسم رباعي باللغة العربية</th><th style="width:130px;">الساعات المكتسبة</th><th style="width:70px;">GPA</th></tr></thead><tbody>${teamRows}</tbody></table>
+
+    <p class="sec-h">قائد فريق المشروع (Team Leader)</p>
+    <table dir="rtl">
+      <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th style="width:120px;">رقم الموبايل</th></tr></thead>
+      <tbody><tr><td class="arb">${esc(data.leaderName)}</td><td>${esc(data.leaderEmail)}</td><td class="center">${esc(data.leaderPhone)}</td></tr></tbody>
+    </table>
     ${pdfFoot(1)}`;
 
+  // Dedicated page for the goal / AI-link / community-service / keywords —
+  // each boxed exactly like the Abstract, with its own room to breathe
+  // instead of being crammed at the bottom of page 1.
   refs.page2.current.innerHTML = `
+    ${pdfHead()}
+    <p class="pg-title" style="font-size:14px;">PROJECT RATIONALE &amp; KEYWORDS</p>
+    ${boxedSection("الهدف من المشروع", data.goal)}
+    ${boxedSection("ربط المشروع بتخصص هندسة الذكاء الاصطناعي", data.aiLink)}
+    ${boxedSection("ربط المشروع بالخدمة المجتمعية", data.communityService)}
+    <div class="abs-box">
+      <div class="abs-h">الكلمات المفتاحية (Keywords)</div>
+      <div class="abs-body" style="text-align:center;">
+        ${(data.keywords || [])
+          .map(
+            (k) =>
+              `<span style="display:inline-block;margin:3px 5px;padding:4px 12px;border-radius:14px;background:#eef2f8;border:1px solid #9aa8bd;font-size:11px;font-weight:700;color:#06265b;">${esc(k)}</span>`
+          )
+          .join("")}
+      </div>
+    </div>
+    ${pdfFoot(2)}`;
+
+  refs.page3.current.innerHTML = `
     ${pdfHead()}
     <p class="sec-h">PROJECT ABSTRACT:</p>
     <div class="abs-box">
@@ -178,7 +261,7 @@ function renderPdfPages(refs, data) {
         .map((p) => `<p>${esc(p)}</p>`)
         .join("")}</div>
     </div>
-    ${pdfFoot(2)}`;
+    ${pdfFoot(3)}`;
 
   const schedRows = data.schedule
     .map(
@@ -193,13 +276,13 @@ function renderPdfPages(refs, data) {
     )
     .join("");
 
-  refs.page3.current.innerHTML = `
+  refs.page4.current.innerHTML = `
     ${pdfHead()}
     <p class="sec-h">TIME SCHEDULE:</p>
     <table><thead><tr><th style="width:90px;">Week</th><th>Task</th></tr></thead><tbody>${schedRows}</tbody></table>
     <p class="sec-h">REQUIRED SOFTWARE TOOLS:</p>
     <table><thead><tr><th style="width:36px;">No.</th><th>Software Tools</th></tr></thead><tbody>${swFirst}</tbody></table>
-    ${pdfFoot(3)}`;
+    ${pdfFoot(4)}`;
 
   const swRest = SW_CATS.slice(4)
     .map(
@@ -208,7 +291,7 @@ function renderPdfPages(refs, data) {
     )
     .join("");
 
-  refs.page4.current.innerHTML = `
+  refs.page5.current.innerHTML = `
     ${pdfHead()}
     <p class="sec-h">REQUIRED SOFTWARE TOOLS (continued):</p>
     <table><thead><tr><th style="width:36px;">No.</th><th>Software Tools</th></tr></thead><tbody>${swRest}</tbody></table>
@@ -219,7 +302,7 @@ function renderPdfPages(refs, data) {
         <tr><td class="center">2</td><td>--------------</td></tr>
       </tbody>
     </table>
-    ${pdfFoot(4)}`;
+    ${pdfFoot(5)}`;
 
   let total = 0,
     hasNumeric = false;
@@ -237,7 +320,7 @@ function renderPdfPages(refs, data) {
     .map((s, i) => `<tr><td class="center">${i + 1}</td><td>${esc(s)}</td></tr>`)
     .join("");
 
-  refs.page5.current.innerHTML = `
+  refs.page6.current.innerHTML = `
     ${pdfHead()}
     <p class="sec-h">BUDGET ANALYSIS:</p>
     <table><thead><tr><th style="width:36px;">No.</th><th>Item</th><th style="width:130px;">Price</th></tr></thead>
@@ -253,7 +336,7 @@ function renderPdfPages(refs, data) {
       <li>يتم عمل تقييم للمشروع في الأسبوع السادس من الدراسة حيث يتم عقد لجنة استماع للمشاريع للتأكد من تحقيق المعايير، وفي حالة عدم تحقيق المعايير يتم إيقاف الدعم المالي للمشاريع التي حصلت على دعم وسيكون أقصى تقدير للطلاب B، ثم يتم إعادة تقييم مرة أخرى في الأسبوع الحادي عشر من الدراسة من خلال عقد لجنة استماع أخرى، وفي حالة تصحيح المسار وتحقيق المعايير فلن يكون هناك قيود على أقصى تقدير سيحصل عليه الطلاب.</li>
     </ol>
     <div class="decision-box">القرار النهائي للجنة المشاريع بالبرنامج<br/><span style="font-weight:400;font-size:11px;">قبول المشروع &nbsp; | &nbsp; رفض المشروع</span></div>
-    ${pdfFoot(5)}`;
+    ${pdfFoot(6)}`;
 }
 
 // Waits for every <img> inside a page (logos included) to finish loading
@@ -276,7 +359,7 @@ async function buildPdf(refs, data) {
   renderPdfPages(refs, data);
   await new Promise((r) => setTimeout(r, 60));
 
-  const pages = [refs.page1, refs.page2, refs.page3, refs.page4, refs.page5];
+  const pages = [refs.page1, refs.page2, refs.page3, refs.page4, refs.page5, refs.page6];
   await Promise.all(pages.map((p) => waitForImages(p.current)));
 
   const { default: html2canvas } = await import("html2canvas");
@@ -345,6 +428,7 @@ export default function ProjectRegistrationPage() {
   const formRef = useRef(null);
   const [ynAnswers, setYnAnswers] = useState(Array(YN_QUESTIONS.length).fill(""));
   const [printing, setPrinting] = useState(false);
+  const [confirmModal, setConfirmModal] = useState(null); // { message, onConfirm } | null
   const [toastMsg, setToastMsg] = useState(null);
   const [toastErr, setToastErr] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
@@ -367,12 +451,33 @@ export default function ProjectRegistrationPage() {
     setTeamRows((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx)));
   }
 
+  // Team leader contact info
+  const [leaderName, setLeaderName] = useState("");
+  const [leaderEmail, setLeaderEmail] = useState("");
+  const [leaderPhone, setLeaderPhone] = useState("");
+
+  // Word-count-limited fields (controlled, so we can show a live counter)
+  const [abstractText, setAbstractText] = useState("");
+  const [goalText, setGoalText] = useState("");
+  const [aiLinkText, setAiLinkText] = useState("");
+  const [communityText, setCommunityText] = useState("");
+
+  // Keywords multi-select dropdown
+  const [keywords, setKeywords] = useState([]);
+  const [keywordsOpen, setKeywordsOpen] = useState(false);
+  function toggleKeyword(kw) {
+    setKeywords((prev) =>
+      prev.includes(kw) ? prev.filter((k) => k !== kw) : [...prev, kw]
+    );
+  }
+
   const page1 = useRef(null);
   const page2 = useRef(null);
   const page3 = useRef(null);
   const page4 = useRef(null);
   const page5 = useRef(null);
-  const refs = { page1, page2, page3, page4, page5 };
+  const page6 = useRef(null);
+  const refs = { page1, page2, page3, page4, page5, page6 };
 
   function showToast(msg, isErr = false) {
     setToastMsg(msg);
@@ -394,6 +499,7 @@ export default function ProjectRegistrationPage() {
     return {
       courseTitle: proj ? `Project ${proj.id} — Requires ${proj.hours} Credit Hours` : "",
       requiredHours: proj ? proj.hours : null,
+      grace: proj ? proj.grace : null,
       titleAr: val("#titleAr"),
       titleEn: val("#titleEn"),
       supervisors: vals(".sup-name"),
@@ -403,7 +509,14 @@ export default function ProjectRegistrationPage() {
         hours: r.hours.trim(),
         gpa: r.gpa.trim(),
       })),
-      abstract: val("#abstract"),
+      leaderName: leaderName.trim(),
+      leaderEmail: leaderEmail.trim(),
+      leaderPhone: leaderPhone.trim(),
+      goal: goalText.trim(),
+      aiLink: aiLinkText.trim(),
+      communityService: communityText.trim(),
+      keywords,
+      abstract: abstractText.trim(),
       schedule: vals(".week-task"),
       sw: Object.fromEntries(
         [...root.querySelectorAll(".sw-input")].map((t) => [t.dataset.key, t.value])
@@ -417,39 +530,92 @@ export default function ProjectRegistrationPage() {
     };
   }
 
-  // Checks every filled-in team member against the selected project's
-  // minimum completed-hours requirement. Returns an array of names that
-  // don't meet it (empty array = everyone is eligible).
-  function findIneligibleMembers(data) {
-    if (!data.requiredHours) return [];
-    return data.team
-      .filter((m) => m.name) // ignore still-empty rows
-      .filter((m) => {
-        const hrs = parseFloat(m.hours);
-        return isNaN(hrs) || hrs < data.requiredHours;
-      })
-      .map((m) => m.name);
+  // Every part of the form is mandatory — this checks all of it and
+  // returns a list of what's still missing (empty array = complete).
+  function getMissingFields(data) {
+    const missing = [];
+
+    if (!data.requiredHours) missing.push("اختيار المشروع (1/2/3)");
+    if (!data.titleAr) missing.push("عنوان المشروع بالعربي");
+    if (!data.titleEn) missing.push("Project Title بالإنجليزي");
+    if (data.supervisors.some((s) => !s)) missing.push("كل أسماء فريق الإشراف");
+    if (data.yn.some((a) => !a)) missing.push("الإجابة على كل الأسئلة (نعم/لا)");
+
+    if (
+      data.team.some((t) => !t.name || !t.hours || !t.gpa)
+    ) {
+      missing.push("بيانات كل عضو في فريق المشروع (الاسم/الساعات/GPA) — احذف أي صف فاضي لو مش محتاجه");
+    }
+
+    if (!data.leaderName) missing.push("اسم قائد الفريق");
+    if (!data.leaderEmail) missing.push("بريد قائد الفريق الإلكتروني");
+    if (!data.leaderPhone) missing.push("رقم موبايل قائد الفريق");
+
+    if (!data.goal) missing.push("الهدف من المشروع");
+    if (!data.aiLink) missing.push("ربط المشروع بتخصص هندسة الذكاء الاصطناعي");
+    if (!data.communityService) missing.push("ربط المشروع بالخدمة المجتمعية");
+    if (!data.keywords.length) missing.push("الكلمات المفتاحية (اختار كلمة واحدة على الأقل)");
+    if (!data.abstract) missing.push("Project Abstract");
+
+    if (data.schedule.some((t) => !t)) missing.push("كل مهام Time Schedule (8 أسابيع)");
+    if (Object.values(data.sw).some((v) => !v.trim())) missing.push("كل أقسام Software Tools");
+    if (!data.hardware) missing.push("Hardware Tools");
+    if (data.budget.some((b) => !b.item || !b.price)) missing.push("كل بنود Budget Analysis");
+    if (data.sponsors.some((s) => !s)) missing.push("كل بيانات Sponsors");
+
+    return missing;
   }
 
-  async function handlePrint(e) {
-    if (e) e.preventDefault();
-
-    const data = collect();
-
-    if (!data.requiredHours) {
-      showToast("اختار المشروع (1 / 2 / 3) الأول قبل الطباعة", true);
-      return;
-    }
-
-    const ineligible = findIneligibleMembers(data);
-    if (ineligible.length > 0) {
-      showToast(
-        `مشروع ${selectedProject} محتاج ${data.requiredHours} ساعة معتمدة على الأقل — الأعضاء دول لسه ماوصلوش: ${ineligible.join("، ")}`,
-        true
+  // Word-count rules (item 2, 3, 4, 5 of the requirements)
+  function getWordCountErrors(data) {
+    const errors = [];
+    const abstractWords = countWords(data.abstract);
+    if (abstractWords < ABSTRACT_MIN_WORDS || abstractWords > ABSTRACT_MAX_WORDS) {
+      errors.push(
+        `الـ Abstract لازم يكون بين ${ABSTRACT_MIN_WORDS} و ${ABSTRACT_MAX_WORDS} كلمة (حاليًا ${abstractWords} كلمة)`
       );
-      return;
     }
+    if (countWords(data.goal) > GOAL_MAX_WORDS) {
+      errors.push(`"الهدف من المشروع" أكتر من ${GOAL_MAX_WORDS} كلمة`);
+    }
+    if (countWords(data.aiLink) > AI_LINK_MAX_WORDS) {
+      errors.push(`"ربط المشروع بالتخصص" أكتر من ${AI_LINK_MAX_WORDS} كلمة`);
+    }
+    if (countWords(data.communityService) > COMMUNITY_MAX_WORDS) {
+      errors.push(`"ربط المشروع بالخدمة المجتمعية" أكتر من ${COMMUNITY_MAX_WORDS} كلمة`);
+    }
+    return errors;
+  }
 
+  // Checks every filled-in team member's hours against the selected
+  // project's requirement, honoring the small "grace window" below the
+  // normal minimum (item 8): inside that window, online registration is
+  // blocked and the person must register on paper at the department
+  // instead of being silently allowed or silently rejected.
+  function checkEligibility(data) {
+    const belowGrace = []; // too short even for the grace window — fully blocked
+    const inGraceZone = []; // within the grace window — needs paper registration
+
+    data.team
+      .filter((m) => m.name)
+      .forEach((m) => {
+        const hrs = parseFloat(m.hours);
+        if (isNaN(hrs) || hrs < data.requiredHours - data.grace) {
+          belowGrace.push(m.name);
+        } else if (hrs < data.requiredHours) {
+          inGraceZone.push(m.name);
+        }
+      });
+
+    if (belowGrace.length > 0) return { status: "blocked", names: belowGrace };
+    if (inGraceZone.length > 0) return { status: "paper", names: inGraceZone };
+    return { status: "ok", names: [] };
+  }
+
+  // Actually builds, downloads, and emails the PDF — shared by the normal
+  // path and by the "confirm anyway" path from the paper-registration
+  // warning dialog below.
+  async function generateAndSend(data) {
     setPrinting(true);
     try {
       const { pdf, safeName } = await buildPdf(refs, data);
@@ -471,6 +637,49 @@ export default function ProjectRegistrationPage() {
     } finally {
       setPrinting(false);
     }
+  }
+
+  async function handlePrint(e) {
+    if (e) e.preventDefault();
+
+    const data = collect();
+
+    const missing = getMissingFields(data);
+    if (missing.length > 0) {
+      showToast(`لسه فاضل تعبّي: ${missing.slice(0, 4).join("، ")}${missing.length > 4 ? " …" : ""}`, true);
+      return;
+    }
+
+    const wordErrors = getWordCountErrors(data);
+    if (wordErrors.length > 0) {
+      showToast(wordErrors.join(" — "), true);
+      return;
+    }
+
+    const eligibility = checkEligibility(data);
+
+    if (eligibility.status === "blocked") {
+      showToast(
+        `مشروع ${selectedProject} محتاج ${data.requiredHours} ساعة معتمدة على الأقل — الأعضاء دول لسه بعيدين: ${eligibility.names.join("، ")}`,
+        true
+      );
+      return;
+    }
+
+    if (eligibility.status === "paper") {
+      // Don't block — warn, and let the person confirm they'll still
+      // follow up with a paper registration at the department.
+      setConfirmModal({
+        message: `الأعضاء دول (${eligibility.names.join("، ")}) ساعاتهم أقل من المطلوب لمشروع ${selectedProject} لكن ضمن هامش السماح — لازم التوجه لإدارة القسم لطلب تسجيل ورقي بعد توقيعه من المرشد الأكاديمي وتسليمه لإدارة البرنامج.`,
+        onConfirm: () => {
+          setConfirmModal(null);
+          generateAndSend(data);
+        },
+      });
+      return;
+    }
+
+    await generateAndSend(data);
   }
 
   return (
@@ -533,7 +742,7 @@ export default function ProjectRegistrationPage() {
             </Field>
           </Card>
 
-          <Card n="2" title="فريق الإشراف" hint="حتى 3 أسماء">
+          <Card n="2" title="فريق الإشراف" hint="حتى 3 أسماء — كلها مطلوبة">
             <table className="rt-table">
               <thead>
                 <tr>
@@ -546,7 +755,7 @@ export default function ProjectRegistrationPage() {
                   <tr key={i}>
                     <td className="rt-center">{i}</td>
                     <td>
-                      <input type="text" className="sup-name rt-cell-input" placeholder="د/ ..." />
+                      <input type="text" className="sup-name rt-cell-input" placeholder="د/ ..." required />
                     </td>
                   </tr>
                 ))}
@@ -554,7 +763,7 @@ export default function ProjectRegistrationPage() {
             </table>
           </Card>
 
-          <Card n="3" title="معلومات أساسية عن مقترح المشروع" hint="جاوب بنعم أو لا على كل سؤال">
+          <Card n="3" title="معلومات أساسية عن مقترح المشروع" hint="جاوب بنعم أو لا على كل سؤال — كلها مطلوبة">
             {YN_QUESTIONS.map((q, i) => (
               <div
                 key={i}
@@ -623,6 +832,7 @@ export default function ProjectRegistrationPage() {
                         placeholder="الاسم رباعي"
                         value={row.name}
                         onChange={(e) => updateTeamRow(i, "name", e.target.value)}
+                        required
                       />
                     </td>
                     <td>
@@ -632,6 +842,7 @@ export default function ProjectRegistrationPage() {
                         placeholder="124"
                         value={row.hours}
                         onChange={(e) => updateTeamRow(i, "hours", e.target.value)}
+                        required
                       />
                     </td>
                     <td>
@@ -641,6 +852,7 @@ export default function ProjectRegistrationPage() {
                         placeholder="3.5"
                         value={row.gpa}
                         onChange={(e) => updateTeamRow(i, "gpa", e.target.value)}
+                        required
                       />
                     </td>
                     <td className="rt-center">
@@ -671,20 +883,150 @@ export default function ProjectRegistrationPage() {
             )}
           </Card>
 
-          <Card n="5" title="Project Abstract" hint="ملخص المشروع بالإنجليزية">
-            <Field>
+          <Card n="5" title="قائد فريق المشروع (Team Leader)" hint="مسؤول التواصل بخصوص المشروع">
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="اسم قائد الفريق" required>
+                <input
+                  type="text"
+                  className="rt-input"
+                  value={leaderName}
+                  onChange={(e) => setLeaderName(e.target.value)}
+                  required
+                />
+              </Field>
+              <Field label="البريد الإلكتروني" required>
+                <input
+                  type="email"
+                  dir="ltr"
+                  className="rt-input"
+                  value={leaderEmail}
+                  onChange={(e) => setLeaderEmail(e.target.value)}
+                  required
+                />
+              </Field>
+              <Field label="رقم الموبايل" required>
+                <input
+                  type="tel"
+                  dir="ltr"
+                  className="rt-input"
+                  value={leaderPhone}
+                  onChange={(e) => setLeaderPhone(e.target.value)}
+                  required
+                />
+              </Field>
+            </div>
+          </Card>
+
+          <Card n="6" title="Project Abstract" hint={`ملخص المشروع بالإنجليزية — بين ${ABSTRACT_MIN_WORDS} و ${ABSTRACT_MAX_WORDS} كلمة`}>
+            <Field required>
               <textarea
-                id="abstract"
                 dir="ltr"
                 className="rt-input"
                 style={{ minHeight: 180 }}
                 placeholder="Write the full project abstract here..."
+                value={abstractText}
+                onChange={(e) => setAbstractText(e.target.value)}
                 required
+              />
+              <WordCounter
+                count={countWords(abstractText)}
+                min={ABSTRACT_MIN_WORDS}
+                max={ABSTRACT_MAX_WORDS}
               />
             </Field>
           </Card>
 
-          <Card n="6" title="Time Schedule" hint="8 أسابيع — اكتب مهام مشروعك">
+          <Card n="7" title="الهدف من المشروع" hint={`حد أقصى ${GOAL_MAX_WORDS} كلمة`}>
+            <Field required>
+              <textarea
+                className="rt-input"
+                style={{ minHeight: 90 }}
+                value={goalText}
+                onChange={(e) => setGoalText(e.target.value)}
+                required
+              />
+              <WordCounter count={countWords(goalText)} max={GOAL_MAX_WORDS} />
+            </Field>
+          </Card>
+
+          <Card n="8" title="ربط المشروع بتخصص هندسة الذكاء الاصطناعي" hint={`حد أقصى ${AI_LINK_MAX_WORDS} كلمة`}>
+            <Field required>
+              <textarea
+                className="rt-input"
+                style={{ minHeight: 90 }}
+                value={aiLinkText}
+                onChange={(e) => setAiLinkText(e.target.value)}
+                required
+              />
+              <WordCounter count={countWords(aiLinkText)} max={AI_LINK_MAX_WORDS} />
+            </Field>
+          </Card>
+
+          <Card n="9" title="ربط المشروع بالخدمة المجتمعية" hint={`حد أقصى ${COMMUNITY_MAX_WORDS} كلمة`}>
+            <Field required>
+              <textarea
+                className="rt-input"
+                style={{ minHeight: 90 }}
+                value={communityText}
+                onChange={(e) => setCommunityText(e.target.value)}
+                required
+              />
+              <WordCounter count={countWords(communityText)} max={COMMUNITY_MAX_WORDS} />
+            </Field>
+          </Card>
+
+          <Card n="10" title="الكلمات المفتاحية (Keywords)" hint="اختار كلمة واحدة على الأقل">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setKeywordsOpen((o) => !o)}
+                className="rt-input flex min-h-[46px] w-full flex-wrap items-center gap-1.5 text-right"
+              >
+                {keywords.length === 0 ? (
+                  <span className="text-[var(--fg-subtle)]">اختار من القائمة...</span>
+                ) : (
+                  keywords.map((k) => (
+                    <span
+                      key={k}
+                      className="rounded-full bg-[var(--gold-soft)] px-2.5 py-1 text-xs font-semibold text-[var(--gold)]"
+                    >
+                      {k}
+                    </span>
+                  ))
+                )}
+              </button>
+
+              {keywordsOpen && (
+                <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-xl">
+                  {KEYWORD_OPTIONS.map((kw) => (
+                    <label
+                      key={kw}
+                      className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm transition hover:bg-[var(--surface-soft)]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={keywords.includes(kw)}
+                        onChange={() => toggleKeyword(kw)}
+                        className="accent-[var(--gold)]"
+                      />
+                      <span className="text-[var(--fg)]">{kw}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            {keywordsOpen && (
+              <button
+                type="button"
+                onClick={() => setKeywordsOpen(false)}
+                className="mt-2 text-xs font-semibold text-[var(--gold)]"
+              >
+                تم — اقفل القائمة
+              </button>
+            )}
+          </Card>
+
+          <Card n="11" title="Time Schedule" hint="8 أسابيع — كل أسبوع مطلوب">
             {SCHEDULE_HINTS.map((hint, i) => (
               <div key={i} className="mb-2 grid grid-cols-[90px_1fr] items-center gap-3">
                 <span className="rounded-lg bg-[var(--surface-soft)] py-2 text-center text-xs font-extrabold text-[var(--navy)] dark:text-[var(--gold)]">
@@ -695,12 +1037,13 @@ export default function ProjectRegistrationPage() {
                   className="week-task rt-input"
                   dir="ltr"
                   placeholder={hint}
+                  required
                 />
               </div>
             ))}
           </Card>
 
-          <Card n="7" title="Required Software Tools" hint="اكتب أدوات مشروعك في كل قسم">
+          <Card n="12" title="Required Software Tools" hint="اكتب أدوات مشروعك في كل قسم — كل الأقسام مطلوبة">
             {SW_CATS.map((cat) => (
               <div key={cat.key} className="mb-4">
                 <label className="mb-1.5 block text-sm font-extrabold text-[var(--navy)] dark:text-[var(--gold)]">
@@ -712,12 +1055,13 @@ export default function ProjectRegistrationPage() {
                   dir="ltr"
                   style={{ minHeight: 66 }}
                   placeholder={cat.hint}
+                  required
                 />
               </div>
             ))}
           </Card>
 
-          <Card n="8" title="Required Hardware Tools">
+          <Card n="13" title="Required Hardware Tools" hint="مطلوب">
             <Field>
               <textarea
                 id="hardware"
@@ -725,11 +1069,12 @@ export default function ProjectRegistrationPage() {
                 className="rt-input"
                 style={{ minHeight: 110 }}
                 placeholder={HARDWARE_HINT}
+                required
               />
             </Field>
           </Card>
 
-          <Card n="9" title="Budget Analysis" hint="الإجمالي بيتحسب أوتوماتيك لو الأسعار أرقام">
+          <Card n="14" title="Budget Analysis" hint="كل الـ 6 بنود مطلوبة — الإجمالي بيتحسب أوتوماتيك لو الأسعار أرقام">
             <table className="rt-table" dir="ltr">
               <thead>
                 <tr>
@@ -748,6 +1093,7 @@ export default function ProjectRegistrationPage() {
                         className="budget-item rt-cell-input"
                         dir="ltr"
                         placeholder="Item"
+                        required
                       />
                     </td>
                     <td>
@@ -756,6 +1102,7 @@ export default function ProjectRegistrationPage() {
                         className="budget-price rt-cell-input"
                         dir="ltr"
                         placeholder="Price"
+                        required
                       />
                     </td>
                   </tr>
@@ -764,7 +1111,7 @@ export default function ProjectRegistrationPage() {
             </table>
           </Card>
 
-          <Card n="10" title="Sponsors">
+          <Card n="15" title="Sponsors" hint="كل الـ 3 صفوف مطلوبة">
             <table className="rt-table" dir="ltr">
               <thead>
                 <tr>
@@ -777,7 +1124,7 @@ export default function ProjectRegistrationPage() {
                   <tr key={i}>
                     <td className="rt-center">{i}</td>
                     <td>
-                      <input type="text" className="sponsor-name rt-cell-input" dir="ltr" />
+                      <input type="text" className="sponsor-name rt-cell-input" dir="ltr" required />
                     </td>
                   </tr>
                 ))}
@@ -820,6 +1167,43 @@ export default function ProjectRegistrationPage() {
         </div>
       )}
 
+      {/* Confirm dialog — used for the "paper registration" warning:
+          the person can still confirm and proceed with the online print. */}
+      {confirmModal && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-6"
+          onClick={() => setConfirmModal(null)}
+        >
+          <div
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-red-500/30 bg-[var(--surface)] p-6 shadow-2xl"
+          >
+            <div className="mb-3 flex items-center gap-2 text-red-600">
+              <span className="text-xl">⚠️</span>
+              <h3 className="text-base font-extrabold">تنبيه قبل الطباعة</h3>
+            </div>
+            <p className="mb-6 text-sm leading-7 text-[var(--fg)]">{confirmModal.message}</p>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-5 py-2.5 text-sm font-bold text-[var(--fg-muted)] transition hover:bg-[var(--border)]"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={confirmModal.onConfirm}
+                className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-700"
+              >
+                تأكيد وطباعة
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hidden PDF pages captured by html2canvas */}
       <div style={{ position: "absolute", left: -99999, top: 0 }}>
         <div className="pg" ref={page1} />
@@ -827,6 +1211,7 @@ export default function ProjectRegistrationPage() {
         <div className="pg" ref={page3} />
         <div className="pg" ref={page4} />
         <div className="pg" ref={page5} />
+        <div className="pg" ref={page6} />
       </div>
 
       {/* Scoped styles: form inputs + PDF page replica */}
@@ -1070,5 +1455,23 @@ function Field({ label, required, children }) {
       )}
       {children}
     </div>
+  );
+}
+
+function WordCounter({ count, min, max }) {
+  const tooShort = min != null && count < min;
+  const tooLong = count > max;
+  const outOfRange = tooShort || tooLong;
+
+  return (
+    <p
+      className={`mt-1.5 text-right text-xs font-semibold ${
+        outOfRange ? "text-red-500" : "text-[var(--fg-subtle)]"
+      }`}
+    >
+      {count} / {max} كلمة
+      {min != null ? ` (الحد الأدنى ${min})` : ""}
+      {outOfRange && " ⚠"}
+    </p>
   );
 }

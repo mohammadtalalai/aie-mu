@@ -94,6 +94,10 @@ export async function POST(request) {
           <tr><td style="padding:6px 0;font-weight:bold;width:160px;">المشروع المختار</td><td>${esc(data.courseTitle)}</td></tr>
           <tr><td style="padding:6px 0;font-weight:bold;">العنوان (عربي)</td><td>${esc(data.titleAr)}</td></tr>
           <tr><td style="padding:6px 0;font-weight:bold;">Project Title</td><td>${esc(data.titleEn)}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:bold;">قائد الفريق</td><td>${esc(data.leaderName)}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:bold;">إيميل القائد</td><td>${esc(data.leaderEmail)}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:bold;">موبايل القائد</td><td>${esc(data.leaderPhone)}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:bold;">الكلمات المفتاحية</td><td>${(data.keywords || []).map(esc).join("، ")}</td></tr>
         </table>
 
         <p style="font-weight:bold;margin-bottom:4px;">فريق الإشراف:</p>
@@ -101,6 +105,15 @@ export async function POST(request) {
 
         <p style="font-weight:bold;margin-bottom:4px;">فريق المشروع:</p>
         <ul style="margin-top:0;">${teamListHtml}</ul>
+
+        <p style="font-weight:bold;margin-bottom:4px;">الهدف من المشروع:</p>
+        <p style="margin-top:0;">${esc(data.goal)}</p>
+
+        <p style="font-weight:bold;margin-bottom:4px;">ربط المشروع بالتخصص:</p>
+        <p style="margin-top:0;">${esc(data.aiLink)}</p>
+
+        <p style="font-weight:bold;margin-bottom:4px;">ربط المشروع بالخدمة المجتمعية:</p>
+        <p style="margin-top:0;">${esc(data.communityService)}</p>
 
         <p style="margin-top:18px;color:#64748b;">النموذج الكامل معبّى بكل التفاصيل مرفق كملف PDF مع الإيميل ده.</p>
       </div>
