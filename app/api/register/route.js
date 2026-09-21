@@ -3,175 +3,663 @@ import { cookies } from "next/headers";
 import { verifySessionToken } from "../../lib/session";
 import { saveRegistration } from "../../lib/db";
 
-// This runs on the SERVER (never in the browser), so it's safe to use
-// SMTP credentials here — they're read from environment variables and
-// never sent to the client. See REGISTRATION_README.md for setup.
+export const runtime = "nodejs";
+
+const MAX_PDF_SIZE = 10 * 1024 * 1024; // 10 MB
+
+function clean(value) {
+  return String(value ?? "").trim();
+}
+
+function escapeHtml(value) {
+  return clean(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function validateRegistration(data) {
+  if (!data || typeof data !== "object") {
+    return "بيانات التسجيل غير صحيحة.";
+  }
+
+  const requiredFields = [
+    ["courseTitle", "المشروع المختار"],
+    ["titleAr", "العنوان بالعربي"],
+    ["titleEn", "Project Title"],
+    ["leaderName", "اسم قائد الفريق"],
+    ["leaderEmail", "إيميل قائد الفريق"],
+    ["leaderPhone", "رقم الهاتف"],
+    ["goal", "هدف المشروع"],
+    ["aiLink", "ربط المشروع بالتخصص"],
+    ["communityService", "الخدمة المجتمعية"],
+  ];
+
+  for (const [field, label] of requiredFields) {
+    if (!clean(data[field])) {
+      return `برجاء إدخال ${label}.`;
+    }
+  }
+
+  const email = clean(data.leaderEmail);
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  if (!emailRegex.test(email)) {
+    return "إيميل قائد الفريق غير صحيح.";
+  }
+
+  if (!Array.isArray(data.team)) {
+    return "بيانات الفريق غير صحيحة.";
+  }
+
+  if (!Array.isArray(data.supervisors)) {
+    return "بيانات المشرفين غير صحيحة.";
+  }
+
+  if (!Array.isArray(data.keywords)) {
+    return "الكلمات المفتاحية غير صحيحة.";
+  }
+
+  if (data.team.length > 20) {
+    return "عدد أعضاء الفريق أكبر من الحد المسموح.";
+  }
+
+  if (data.supervisors.length > 10) {
+    return "عدد المشرفين أكبر من الحد المسموح.";
+  }
+
+  for (const member of data.team) {
+    if (!member || typeof member !== "object") {
+      return "بيانات أحد أعضاء الفريق غير صحيحة.";
+    }
+
+    if (!clean(member.name)) {
+      return "كل أعضاء الفريق يجب أن يكون لهم اسم.";
+    }
+  }
+
+  return null;
+}
+
+function validatePdf(pdfBase64) {
+  if (typeof pdfBase64 !== "string" || !pdfBase64) {
+    return "ملف PDF مطلوب.";
+  }
+
+  const prefix = "data:application/pdf;base64,";
+
+  if (!pdfBase64.startsWith(prefix)) {
+    return "الملف المرفوع يجب أن يكون PDF صالحًا.";
+  }
+
+  const base64Data = pdfBase64.slice(prefix.length);
+
+  if (!base64Data) {
+    return "ملف PDF فارغ.";
+  }
+
+  // Base64 length is approximately 4/3 of the original size.
+  const estimatedSize = Math.floor((base64Data.length * 3) / 4);
+
+  if (estimatedSize > MAX_PDF_SIZE) {
+    return "حجم ملف PDF يجب ألا يتجاوز 10MB.";
+  }
+
+  // Basic Base64 validation.
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64Data)) {
+    return "بيانات ملف PDF غير صحيحة.";
+  }
+
+  return null;
+}
+
+function buildTeamHtml(team) {
+  if (!Array.isArray(team) || team.length === 0) {
+    return "<li>لم يتم إدخال أعضاء.</li>";
+  }
+
+  return team
+    .filter((member) => clean(member?.name))
+    .map((member) => {
+      const name = escapeHtml(member.name);
+      const hours = escapeHtml(member.hours) || "?";
+      const gpa = escapeHtml(member.gpa) || "?";
+
+      return `
+        <li>
+          ${name} —
+          ${hours} ساعة معتمدة —
+          GPA ${gpa}
+        </li>
+      `;
+    })
+    .join("");
+}
+
+function buildSupervisorsHtml(supervisors) {
+  if (!Array.isArray(supervisors) || supervisors.length === 0) {
+    return "<li>—</li>";
+  }
+
+  const items = supervisors
+    .filter(Boolean)
+    .map((supervisor) => {
+      return `<li>${escapeHtml(supervisor)}</li>`;
+    })
+    .join("");
+
+  return items || "<li>—</li>";
+}
+
+function buildKeywordsHtml(keywords) {
+  if (!Array.isArray(keywords) || keywords.length === 0) {
+    return "—";
+  }
+
+  return keywords
+    .filter(Boolean)
+    .map((keyword) => escapeHtml(keyword))
+    .join("، ");
+}
+
+function buildEmailHtml(data, sessionEmail) {
+  const teamHtml = buildTeamHtml(data.team);
+  const supervisorsHtml = buildSupervisorsHtml(data.supervisors);
+  const keywordsHtml = buildKeywordsHtml(data.keywords);
+
+  return `
+    <!DOCTYPE html>
+    <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="UTF-8" />
+        <title>تسجيل مشروع تخرج جديد</title>
+      </head>
+
+      <body
+        style="
+          margin:0;
+          padding:30px;
+          background:#f8fafc;
+          font-family:Tahoma,Arial,sans-serif;
+          color:#111827;
+        "
+      >
+        <div
+          style="
+            max-width:700px;
+            margin:auto;
+            background:#ffffff;
+            border-radius:12px;
+            padding:30px;
+            border:1px solid #e5e7eb;
+          "
+        >
+
+          <h2
+            style="
+              color:#06265b;
+              margin:0 0 5px;
+            "
+          >
+            📥 تسجيل مشروع تخرج جديد
+          </h2>
+
+          <p
+            style="
+              color:#64748b;
+              margin-top:0;
+            "
+          >
+            وصل تسجيل جديد من صفحة Project Registration
+          </p>
+
+          <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;" />
+
+          <table
+            style="
+              border-collapse:collapse;
+              width:100%;
+              font-size:14px;
+            "
+          >
+
+            <tr>
+              <td style="padding:8px 0;font-weight:bold;width:180px;">
+                المشروع المختار
+              </td>
+              <td style="padding:8px 0;">
+                ${escapeHtml(data.courseTitle)}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 0;font-weight:bold;">
+                العنوان بالعربي
+              </td>
+              <td style="padding:8px 0;">
+                ${escapeHtml(data.titleAr)}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 0;font-weight:bold;">
+                Project Title
+              </td>
+              <td style="padding:8px 0;">
+                ${escapeHtml(data.titleEn)}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 0;font-weight:bold;">
+                قائد الفريق
+              </td>
+              <td style="padding:8px 0;">
+                ${escapeHtml(data.leaderName)}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 0;font-weight:bold;">
+                إيميل القائد
+              </td>
+              <td style="padding:8px 0;">
+                ${escapeHtml(data.leaderEmail)}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 0;font-weight:bold;">
+                موبايل القائد
+              </td>
+              <td style="padding:8px 0;">
+                ${escapeHtml(data.leaderPhone)}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 0;font-weight:bold;">
+                إيميل التحقق
+              </td>
+              <td style="padding:8px 0;">
+                ${escapeHtml(sessionEmail)}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 0;font-weight:bold;">
+                الكلمات المفتاحية
+              </td>
+              <td style="padding:8px 0;">
+                ${keywordsHtml}
+              </td>
+            </tr>
+
+          </table>
+
+          <div style="margin-top:25px;">
+
+            <h3 style="margin-bottom:8px;">
+              👨‍🏫 فريق الإشراف
+            </h3>
+
+            <ul>
+              ${supervisorsHtml}
+            </ul>
+
+          </div>
+
+          <div style="margin-top:25px;">
+
+            <h3 style="margin-bottom:8px;">
+              👥 فريق المشروع
+            </h3>
+
+            <ul>
+              ${teamHtml}
+            </ul>
+
+          </div>
+
+          <div style="margin-top:25px;">
+
+            <h3 style="margin-bottom:8px;">
+              🎯 الهدف من المشروع
+            </h3>
+
+            <p style="white-space:pre-wrap;">
+              ${escapeHtml(data.goal)}
+            </p>
+
+          </div>
+
+          <div style="margin-top:25px;">
+
+            <h3 style="margin-bottom:8px;">
+              🤖 ربط المشروع بتخصص الذكاء الاصطناعي
+            </h3>
+
+            <p style="white-space:pre-wrap;">
+              ${escapeHtml(data.aiLink)}
+            </p>
+
+          </div>
+
+          <div style="margin-top:25px;">
+
+            <h3 style="margin-bottom:8px;">
+              🌍 ربط المشروع بالخدمة المجتمعية
+            </h3>
+
+            <p style="white-space:pre-wrap;">
+              ${escapeHtml(data.communityService)}
+            </p>
+
+          </div>
+
+          <div
+            style="
+              margin-top:30px;
+              padding:15px;
+              background:#f1f5f9;
+              border-radius:8px;
+              color:#64748b;
+              font-size:13px;
+            "
+          >
+            النموذج الكامل مرفق بهذا البريد كملف PDF.
+          </div>
+
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+function createTransporter() {
+  const host = clean(process.env.SMTP_HOST);
+  const user = clean(process.env.SMTP_USER);
+  const pass = clean(process.env.SMTP_PASS);
+
+  const rawPort = clean(process.env.SMTP_PORT);
+  const port = Number(rawPort) || 587;
+
+  if (!host || !user || !pass) {
+    throw new Error("SMTP configuration is missing.");
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: {
+      user,
+      pass,
+    },
+  });
+}
+
 export async function POST(request) {
   try {
-    // ── Real security check happens HERE, not in the browser ──
-    // The client can be tricked or bypassed, but it can't forge a valid
-    // signed cookie — that can only exist if /api/auth/verify-otp issued
-    // it after a correct OTP for this exact email.
-    const cookieStore = await cookies();
-    const token = cookieStore.get("reg_session")?.value;
-    const session = token ? verifySessionToken(token) : null;
+    // --------------------------------------------------
+    // 1. Verify session
+    // --------------------------------------------------
 
-    if (!session) {
+    const cookieStore = await cookies();
+
+    const token = cookieStore.get("reg_session")?.value;
+
+    if (!token) {
       return Response.json(
-        { ok: false, error: "لازم تتحقق من الإيميل الجامعي الأول قبل التسجيل." },
+        {
+          ok: false,
+          error: "لازم تتحقق من الإيميل الجامعي الأول قبل التسجيل.",
+        },
         { status: 401 }
       );
     }
 
-    const body = await request.json();
-    const { data, pdfBase64 } = body || {};
+    const session = verifySessionToken(token);
 
-    if (!data || !pdfBase64) {
+    if (!session || !session.email) {
       return Response.json(
-        { ok: false, error: "Missing form data or PDF." },
+        {
+          ok: false,
+          error: "جلسة التحقق غير صالحة أو منتهية. تحقق من الإيميل مرة أخرى.",
+        },
+        { status: 401 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 2. Parse request body
+    // --------------------------------------------------
+
+    let body;
+
+    try {
+      body = await request.json();
+    } catch {
+      return Response.json(
+        {
+          ok: false,
+          error: "بيانات الطلب غير صحيحة.",
+        },
         { status: 400 }
       );
     }
 
-    // Persist the full submission — this is the permanent record, kept
-    // regardless of whether the email to the admin succeeds below. The
-    // actual PDF file is saved to disk too, so the admin can download it
-    // later from /admin/registrations without depending on the email.
-    saveRegistration(session.email, data, pdfBase64);
+    const { data, pdfBase64 } = body || {};
 
-    const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ADMIN_EMAIL } = process.env;
+    // --------------------------------------------------
+    // 3. Validate form
+    // --------------------------------------------------
 
-    // .trim() guards against a very common copy-paste mistake: an extra
-    // space or invisible character at the start/end of a value in
-    // .env.local, which otherwise causes a confusing "Invalid login" error
-    // that looks like the password itself is wrong.
-    const host = SMTP_HOST?.trim();
-    const user = SMTP_USER?.trim();
-    const pass = SMTP_PASS?.trim();
-    const adminEmail = ADMIN_EMAIL?.trim();
-    const port = Number(SMTP_PORT?.trim()) || 587;
+    const validationError = validateRegistration(data);
 
-    if (!host || !user || !pass || !adminEmail) {
-      console.error(
-        "[register] Missing SMTP_HOST / SMTP_USER / SMTP_PASS / ADMIN_EMAIL env vars — email not sent."
+    if (validationError) {
+      return Response.json(
+        {
+          ok: false,
+          error: validationError,
+        },
+        { status: 400 }
       );
+    }
+
+    // --------------------------------------------------
+    // 4. Validate PDF
+    // --------------------------------------------------
+
+    const pdfError = validatePdf(pdfBase64);
+
+    if (pdfError) {
+      return Response.json(
+        {
+          ok: false,
+          error: pdfError,
+        },
+        { status: 400 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 5. Make sure leader email matches verified email
+    // --------------------------------------------------
+
+    const verifiedEmail = clean(session.email).toLowerCase();
+    const leaderEmail = clean(data.leaderEmail).toLowerCase();
+
+    if (verifiedEmail !== leaderEmail) {
       return Response.json(
         {
           ok: false,
           error:
-            "الإيميل مش متظبط على السيرفر لسه — تأكد إن ملف .env.local فيه SMTP_HOST و SMTP_USER و SMTP_PASS و ADMIN_EMAIL، وإنك عملت restart للسيرفر بعد ما ضفتهم.",
+            "إيميل قائد الفريق يجب أن يكون نفس الإيميل الجامعي الذي تم التحقق منه.",
         },
-        { status: 500 }
+        { status: 403 }
       );
     }
 
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465, // true for port 465, false for 587/25
-      auth: { user, pass },
-    });
+    // --------------------------------------------------
+    // 6. SMTP configuration
+    // --------------------------------------------------
 
-    // Checks the SMTP connection + login BEFORE trying to send, so a wrong
-    // App Password or wrong host/port shows a clear, specific error instead
-    // of a generic "Failed to send email."
-    try {
-      await transporter.verify();
-    } catch (verifyErr) {
-      console.error("[register] SMTP verify failed:", verifyErr);
+    const adminEmail = clean(process.env.ADMIN_EMAIL);
+
+    if (!adminEmail) {
+      console.error("[register] ADMIN_EMAIL is missing.");
+
       return Response.json(
         {
           ok: false,
-          error: `مش قادر يدخل على حساب الإيميل: ${verifyErr.message}. راجع إن SMTP_PASS هو الـ App Password الصحيح (16 حرف بدون مسافات)، وإن SMTP_HOST/SMTP_PORT مظبوطين.`,
+          error: "خدمة التسجيل غير متاحة حاليًا. حاول مرة أخرى لاحقًا.",
         },
         { status: 500 }
       );
     }
 
-    // pdfBase64 arrives as a data URI: "data:application/pdf;base64,XXXXX"
-    const base64Data = String(pdfBase64).split(",").pop();
+    // --------------------------------------------------
+    // 7. Decode PDF
+    // --------------------------------------------------
 
-    const esc = (s) =>
-      String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const prefix = "data:application/pdf;base64,";
 
-    const teamListHtml =
-      (data.team || [])
-        .filter((m) => m.name)
-        .map(
-          (m) =>
-            `<li>${esc(m.name)} — ${esc(m.hours) || "?"} ساعة معتمدة — GPA ${esc(m.gpa) || "?"}</li>`
-        )
-        .join("") || "<li>لم يتم إدخال أعضاء بعد</li>";
+    const base64Data = pdfBase64.slice(prefix.length);
 
-    const supervisorsHtml =
-      (data.supervisors || [])
-        .filter(Boolean)
-        .map((s) => `<li>${esc(s)}</li>`)
-        .join("") || "<li>—</li>";
-
-    const html = `
-      <div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;font-size:14px;line-height:1.9;color:#111">
-        <h2 style="color:#06265b;margin-bottom:4px;">📥 تسجيل مشروع تخرج جديد</h2>
-        <p style="color:#64748b;margin-top:0;">وصل الآن من صفحة Project Registration</p>
-
-        <table style="border-collapse:collapse;width:100%;max-width:560px;margin:16px 0;">
-          <tr><td style="padding:6px 0;font-weight:bold;width:160px;">المشروع المختار</td><td>${esc(data.courseTitle)}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:bold;">العنوان (عربي)</td><td>${esc(data.titleAr)}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:bold;">Project Title</td><td>${esc(data.titleEn)}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:bold;">قائد الفريق</td><td>${esc(data.leaderName)}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:bold;">إيميل القائد</td><td>${esc(data.leaderEmail)}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:bold;">موبايل القائد</td><td>${esc(data.leaderPhone)}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:bold;">الكلمات المفتاحية</td><td>${(data.keywords || []).map(esc).join("، ")}</td></tr>
-        </table>
-
-        <p style="font-weight:bold;margin-bottom:4px;">فريق الإشراف:</p>
-        <ul style="margin-top:0;">${supervisorsHtml}</ul>
-
-        <p style="font-weight:bold;margin-bottom:4px;">فريق المشروع:</p>
-        <ul style="margin-top:0;">${teamListHtml}</ul>
-
-        <p style="font-weight:bold;margin-bottom:4px;">الهدف من المشروع:</p>
-        <p style="margin-top:0;">${esc(data.goal)}</p>
-
-        <p style="font-weight:bold;margin-bottom:4px;">ربط المشروع بالتخصص:</p>
-        <p style="margin-top:0;">${esc(data.aiLink)}</p>
-
-        <p style="font-weight:bold;margin-bottom:4px;">ربط المشروع بالخدمة المجتمعية:</p>
-        <p style="margin-top:0;">${esc(data.communityService)}</p>
-
-        <p style="margin-top:18px;color:#64748b;">النموذج الكامل معبّى بكل التفاصيل مرفق كملف PDF مع الإيميل ده.</p>
-      </div>
-    `;
+    // --------------------------------------------------
+    // 8. Generate safe filename
+    // --------------------------------------------------
 
     const safeName =
-      (data.titleEn || "project")
-        .replace(/[^a-z0-9\-_ ]/gi, "")
+      clean(data.titleEn)
+        .replace(/[^a-zA-Z0-9-_ ]/g, "")
         .trim()
-        .replace(/\s+/g, "_") || "project";
+        .replace(/\s+/g, "_")
+        .slice(0, 100) || "project";
 
-    await transporter.sendMail({
-      from: `"تسجيل مشاريع AI Engineering" <${user}>`,
-      to: adminEmail,
-      subject: `تسجيل مشروع جديد: ${data.titleEn || data.titleAr || "بدون عنوان"}`,
-      html,
-      attachments: [
+    const filename = `${safeName}_Registration.pdf`;
+
+    // --------------------------------------------------
+    // 9. Save registration
+    // --------------------------------------------------
+
+    // IMPORTANT:
+    // saveRegistration() should use a real persistent database/storage
+    // in production. Do NOT depend on local filesystem on Vercel.
+
+    const registration = await saveRegistration(
+      session.email,
+      data,
+      pdfBase64
+    );
+
+    // saveRegistration can optionally return an ID.
+    const registrationId =
+      registration?.id ||
+      registration?.registrationId ||
+      `REG-${Date.now()}`;
+
+    // --------------------------------------------------
+    // 10. Build email
+    // --------------------------------------------------
+
+    const html = buildEmailHtml(data, session.email);
+
+    // --------------------------------------------------
+    // 11. Create SMTP transporter
+    // --------------------------------------------------
+
+    const transporter = createTransporter();
+
+    // --------------------------------------------------
+    // 12. Verify SMTP
+    // --------------------------------------------------
+
+    try {
+      await transporter.verify();
+    } catch (smtpError) {
+      console.error("[register] SMTP verification failed:", smtpError);
+
+      return Response.json(
         {
-          filename: `${safeName}_Registration.pdf`,
-          content: base64Data,
-          encoding: "base64",
+          ok: false,
+          error:
+            "تم حفظ التسجيل، لكن حدث خطأ أثناء إرسال الإيميل للإدارة. يرجى التواصل مع الإدارة إذا لم يصلك تأكيد.",
+          registrationId,
         },
-      ],
-    });
+        { status: 500 }
+      );
+    }
 
-    return Response.json({ ok: true });
-  } catch (err) {
-    console.error("[register] Failed to send registration email:", err);
-    // Surface the REAL underlying error (e.g. "Invalid login", "ENOTFOUND",
-    // wrong port, etc.) directly in the response — this is what actually
-    // shows up in the toast on screen, so there's no need to go dig through
-    // server terminal logs to diagnose a setup problem.
+    // --------------------------------------------------
+    // 13. Send email
+    // --------------------------------------------------
+
+    try {
+      await transporter.sendMail({
+        from: `"AI Engineering Registration" <${clean(
+          process.env.SMTP_USER
+        )}>`,
+
+        to: adminEmail,
+
+        replyTo: leaderEmail,
+
+        subject: `تسجيل مشروع جديد: ${
+          clean(data.titleEn) ||
+          clean(data.titleAr) ||
+          "بدون عنوان"
+        }`,
+
+        html,
+
+        attachments: [
+          {
+            filename,
+            content: base64Data,
+            encoding: "base64",
+            contentType: "application/pdf",
+          },
+        ],
+      });
+    } catch (emailError) {
+      console.error("[register] Email sending failed:", emailError);
+
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "تم حفظ بيانات التسجيل، لكن تعذر إرسال البريد الإلكتروني للإدارة.",
+          registrationId,
+        },
+        { status: 500 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 14. Success
+    // --------------------------------------------------
+
     return Response.json(
-      { ok: false, error: err?.message || "Failed to send email." },
+      {
+        ok: true,
+        message: "تم تسجيل مشروع التخرج بنجاح.",
+        registrationId,
+      },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error("[register] Unexpected server error:", error);
+
+    return Response.json(
+      {
+        ok: false,
+        error: "حدث خطأ غير متوقع أثناء التسجيل. حاول مرة أخرى.",
+      },
       { status: 500 }
     );
   }
