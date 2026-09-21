@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /* ============================================================
    Defaults pulled from the official Graduation Project Template
@@ -425,6 +425,9 @@ async function sendCopyToAdmin(data, pdf) {
    Component
 ============================================================ */
 export default function ProjectRegistrationPage() {
+  const [verified, setVerified] = useState(false);
+  const [verifiedEmail, setVerifiedEmail] = useState("");
+
   const formRef = useRef(null);
   const [ynAnswers, setYnAnswers] = useState(Array(YN_QUESTIONS.length).fill(""));
   const [printing, setPrinting] = useState(false);
@@ -454,6 +457,14 @@ export default function ProjectRegistrationPage() {
   // Team leader contact info
   const [leaderName, setLeaderName] = useState("");
   const [leaderEmail, setLeaderEmail] = useState("");
+
+  // Pre-fill the leader's email with the verified university address —
+  // the person can still edit it, but it saves a step in the common case.
+  useEffect(() => {
+    if (verifiedEmail && !leaderEmail) setLeaderEmail(verifiedEmail);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifiedEmail]);
+
   const [leaderPhone, setLeaderPhone] = useState("");
 
   // Word-count-limited fields (controlled, so we can show a live counter)
@@ -682,6 +693,20 @@ export default function ProjectRegistrationPage() {
     await generateAndSend(data);
   }
 
+  // The real access control happens server-side on every /api/register
+  // request (via the signed cookie) — this client-side gate is just UX:
+  // it hides the (long) form until the email is verified.
+  if (!verified) {
+    return (
+      <EmailGate
+        onVerified={(email) => {
+          setVerified(true);
+          setVerifiedEmail(email);
+        }}
+      />
+    );
+  }
+
   return (
     <section className="min-h-screen bg-[var(--bg)] px-6 pb-28 pt-40 transition-colors duration-300 md:px-10">
       <div className="mx-auto max-w-4xl">
@@ -696,6 +721,9 @@ export default function ProjectRegistrationPage() {
             سجّل بيانات مشروعك بالكامل، وبعدها دوس "طباعة PDF" — هيتحمّلك ملف
             مطابق لنموذج
             القسم الرسمي معبّى ببياناتك.
+          </p>
+          <p className="mx-auto mt-3 inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-600">
+            ✓ متحقق كـ {verifiedEmail}
           </p>
         </div>
 
@@ -1473,5 +1501,175 @@ function WordCounter({ count, min, max }) {
       {min != null ? ` (الحد الأدنى ${min})` : ""}
       {outOfRange && " ⚠"}
     </p>
+  );
+}
+
+/* ============================================================
+   Email verification gate — university email + OTP.
+   The real enforcement is server-side (signed cookie checked by
+   /api/register); this component is the UX for getting that cookie.
+============================================================ */
+function EmailGate({ onVerified }) {
+  const [step, setStep] = useState("email"); // "email" | "code"
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  async function sendCode(e) {
+    if (e) e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.error || "حصل خطأ");
+      setStep("code");
+      setCooldown(60);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function verifyCode(e) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.error || "الكود غلط");
+      onVerified(body.email);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="flex min-h-screen items-center justify-center bg-[var(--bg)] px-6 transition-colors duration-300">
+      <div
+        dir="rtl"
+        className="w-full max-w-md rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-8 shadow-sm md:p-10"
+      >
+        <span className="mb-4 inline-flex items-center gap-2 rounded-full border border-[var(--gold)]/25 bg-[var(--gold-soft)] px-4 py-2 text-xs font-bold uppercase tracking-[0.15em] text-[var(--gold)]">
+          🔒 تحقق مطلوب
+        </span>
+
+        <h1 className="mb-2 text-2xl font-black text-[var(--fg)]">
+          تسجيل مشروع التخرج
+        </h1>
+        <p className="mb-7 text-sm text-[var(--fg-muted)]">
+          {step === "email"
+            ? "من فضلك أكّد إيميلك الجامعي الأول قبل ما تبدأ التسجيل."
+            : `بعتنالك كود من 6 أرقام على ${email} — اكتبه هنا.`}
+        </p>
+
+        {step === "email" ? (
+          <form onSubmit={sendCode}>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@std.mans.edu.eg"
+              dir="ltr"
+              required
+              autoFocus
+              className="mb-4 w-full rounded-xl border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3.5 text-sm text-[var(--fg)] outline-none focus:border-[var(--gold)]"
+            />
+
+            {error && <p className="mb-4 text-sm font-semibold text-red-500">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--navy)] py-3.5 text-sm font-bold text-white transition hover:bg-[var(--navy-light)] disabled:opacity-60"
+            >
+              {loading ? (
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  جارِ الإرسال...
+                </>
+              ) : (
+                "ابعتلي كود التحقق"
+              )}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={verifyCode}>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              placeholder="••••••"
+              dir="ltr"
+              required
+              autoFocus
+              className="mb-4 w-full rounded-xl border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3.5 text-center text-2xl font-black tracking-[0.5em] text-[var(--fg)] outline-none focus:border-[var(--gold)]"
+            />
+
+            {error && <p className="mb-4 text-sm font-semibold text-red-500">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={loading || code.length !== 6}
+              className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--navy)] py-3.5 text-sm font-bold text-white transition hover:bg-[var(--navy-light)] disabled:opacity-60"
+            >
+              {loading ? (
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  جارِ التحقق...
+                </>
+              ) : (
+                "تأكيد الكود"
+              )}
+            </button>
+
+            <div className="flex items-center justify-between text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setStep("email");
+                  setCode("");
+                  setError("");
+                }}
+                className="font-semibold text-[var(--fg-muted)] hover:text-[var(--fg)]"
+              >
+                ← غيّر الإيميل
+              </button>
+
+              <button
+                type="button"
+                onClick={sendCode}
+                disabled={cooldown > 0 || loading}
+                className="font-semibold text-[var(--gold)] disabled:text-[var(--fg-subtle)]"
+              >
+                {cooldown > 0 ? `أعد الإرسال بعد ${cooldown}s` : "أعد إرسال الكود"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </section>
   );
 }

@@ -1,10 +1,28 @@
 import nodemailer from "nodemailer";
+import { cookies } from "next/headers";
+import { verifySessionToken } from "../../lib/session";
+import { saveRegistration } from "../../lib/db";
 
 // This runs on the SERVER (never in the browser), so it's safe to use
 // SMTP credentials here — they're read from environment variables and
 // never sent to the client. See REGISTRATION_README.md for setup.
 export async function POST(request) {
   try {
+    // ── Real security check happens HERE, not in the browser ──
+    // The client can be tricked or bypassed, but it can't forge a valid
+    // signed cookie — that can only exist if /api/auth/verify-otp issued
+    // it after a correct OTP for this exact email.
+    const cookieStore = await cookies();
+    const token = cookieStore.get("reg_session")?.value;
+    const session = token ? verifySessionToken(token) : null;
+
+    if (!session) {
+      return Response.json(
+        { ok: false, error: "لازم تتحقق من الإيميل الجامعي الأول قبل التسجيل." },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
     const { data, pdfBase64 } = body || {};
 
@@ -14,6 +32,12 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+
+    // Persist the full submission — this is the permanent record, kept
+    // regardless of whether the email to the admin succeeds below. The
+    // actual PDF file is saved to disk too, so the admin can download it
+    // later from /admin/registrations without depending on the email.
+    saveRegistration(session.email, data, pdfBase64);
 
     const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ADMIN_EMAIL } = process.env;
 
