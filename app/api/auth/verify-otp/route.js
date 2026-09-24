@@ -6,11 +6,17 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
+function clean(value) {
+  return String(value ?? "").trim();
+}
+
 export async function POST(request) {
   try {
-    /* =====================================================
-       1. Parse JSON
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 1. Parse JSON
+    |--------------------------------------------------------------------------
+    */
 
     let body;
 
@@ -18,7 +24,7 @@ export async function POST(request) {
       body = await request.json();
     } catch (error) {
       console.error(
-        "[verify-otp] Invalid JSON request:",
+        "[verify-otp] Invalid JSON:",
         error
       );
 
@@ -33,19 +39,20 @@ export async function POST(request) {
       );
     }
 
-    const email = String(
-      body?.email || ""
-    )
-      .trim()
-      .toLowerCase();
+    /*
+    |--------------------------------------------------------------------------
+    | 2. Read values
+    |--------------------------------------------------------------------------
+    */
 
-    const code = String(
-      body?.code || ""
-    ).trim();
+    const email = clean(body?.email).toLowerCase();
+    const code = clean(body?.code);
 
-    /* =====================================================
-       2. Validate
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 3. Validate
+    |--------------------------------------------------------------------------
+    */
 
     if (!email || !code) {
       return NextResponse.json(
@@ -59,11 +66,7 @@ export async function POST(request) {
       );
     }
 
-    if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
-        email
-      )
-    ) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return NextResponse.json(
         {
           ok: false,
@@ -79,8 +82,7 @@ export async function POST(request) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "كود التحقق يجب أن يكون 6 أرقام.",
+          error: "كود التحقق يجب أن يكون 6 أرقام.",
         },
         {
           status: 400,
@@ -88,17 +90,16 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       3. Verify OTP
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 4. Verify OTP
+    |--------------------------------------------------------------------------
+    */
 
     let result;
 
     try {
-      result = await verifyOtp(
-        email,
-        code
-      );
+      result = await verifyOtp(email, code);
     } catch (error) {
       console.error(
         "[verify-otp] Database error:",
@@ -108,8 +109,7 @@ export async function POST(request) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "حدث خطأ أثناء التحقق من الكود.",
+          error: "حدث خطأ أثناء التحقق من الكود.",
         },
         {
           status: 500,
@@ -131,18 +131,16 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       4. Create Session
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 5. Create Session
+    |--------------------------------------------------------------------------
+    */
 
     let token;
 
     try {
-      token =
-        createSessionToken(
-          email,
-          60
-        );
+      token = createSessionToken(email, 60);
     } catch (error) {
       console.error(
         "[verify-otp] Session creation failed:",
@@ -161,31 +159,31 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       5. Response
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 6. Response
+    |--------------------------------------------------------------------------
+    */
 
-    const response =
-      NextResponse.json(
-        {
-          ok: true,
-          email,
-          message:
-            "تم تأكيد الإيميل بنجاح.",
+    const response = NextResponse.json(
+      {
+        ok: true,
+        email,
+        message: "تم تأكيد الإيميل بنجاح.",
+      },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": "no-store",
         },
-        {
-          status: 200,
+      }
+    );
 
-          headers: {
-            "Cache-Control":
-              "no-store, no-cache, must-revalidate",
-          },
-        }
-      );
-
-    /* =====================================================
-       6. Secure Cookie
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 7. Cookie
+    |--------------------------------------------------------------------------
+    */
 
     response.cookies.set({
       name: "reg_session",
@@ -195,15 +193,13 @@ export async function POST(request) {
       httpOnly: true,
 
       secure:
-        process.env.NODE_ENV ===
-        "production",
+        process.env.NODE_ENV === "production",
 
       sameSite: "lax",
 
       path: "/",
 
-      maxAge:
-        60 * 60,
+      maxAge: 60 * 60,
     });
 
     return response;
@@ -216,15 +212,12 @@ export async function POST(request) {
     return NextResponse.json(
       {
         ok: false,
-        error:
-          "حصل خطأ أثناء التحقق.",
+        error: "حصل خطأ أثناء التحقق.",
       },
       {
         status: 500,
-
         headers: {
-          "Cache-Control":
-            "no-store",
+          "Cache-Control": "no-store",
         },
       }
     );
