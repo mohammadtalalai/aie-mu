@@ -1,25 +1,88 @@
-import { listRegistrations } from "../../../lib/db";
+import {
+  listRegistrations,
+} from "../../../lib/db";
 
-export async function GET(request) {
-  const auth = request.headers.get("x-admin-password") || "";
-  const expected = process.env.ADMIN_PASSWORD || "";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-  if (!expected) {
-    return Response.json(
-      { ok: false, error: "ADMIN_PASSWORD مش متظبط على السيرفر." },
-      { status: 500 }
-    );
-  }
-
-  if (auth !== expected) {
-    return Response.json({ ok: false, error: "الباسورد غلط." }, { status: 401 });
-  }
-
+export async function GET(
+  request
+) {
   try {
-    const registrations = listRegistrations();
-    return Response.json({ ok: true, registrations });
-  } catch (err) {
-    console.error("[admin/registrations] failed:", err);
-    return Response.json({ ok: false, error: "حصل خطأ في قراءة القاعدة." }, { status: 500 });
+    /* =====================================================
+       Authentication
+    ===================================================== */
+
+    const auth =
+      request.headers.get(
+        "x-admin-password"
+      ) || "";
+
+    const expected =
+      process.env.ADMIN_PASSWORD ||
+      "";
+
+    if (!expected) {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "ADMIN_PASSWORD مش متظبط على السيرفر.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    if (auth !== expected) {
+      return Response.json(
+        {
+          ok: false,
+          error: "الباسورد غلط.",
+        },
+        {
+          status: 401,
+        }
+      );
+    }
+
+    /* =====================================================
+       Database
+    ===================================================== */
+
+    const registrations =
+      await listRegistrations();
+
+    return Response.json(
+      {
+        ok: true,
+        registrations,
+      },
+      {
+        status: 200,
+
+        headers: {
+          "Cache-Control":
+            "no-store",
+        },
+      }
+    );
+  } catch (error) {
+    console.error(
+      "[admin/registrations] failed:",
+      error
+    );
+
+    return Response.json(
+      {
+        ok: false,
+        error:
+          "حصل خطأ في قراءة قاعدة البيانات.",
+      },
+      {
+        status: 500,
+      }
+    );
   }
 }
