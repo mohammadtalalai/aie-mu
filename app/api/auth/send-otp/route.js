@@ -1,19 +1,48 @@
+```javascript
 import crypto from "crypto";
 import nodemailer from "nodemailer";
 import { saveOtp } from "../../../lib/db";
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const ALLOWED_EMAIL_DOMAIN = (
   process.env.ALLOWED_EMAIL_DOMAIN || "@std.mans.edu.eg"
-).toLowerCase();
+)
+  .trim()
+  .toLowerCase();
 
 export async function POST(request) {
   try {
-    const body = await request.json();
+    // =========================
+    // 1. Parse request body
+    // =========================
+    let body;
+
+    try {
+      body = await request.json();
+    } catch (error) {
+      console.error("[send-otp] Invalid JSON body:", error);
+
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "بيانات الطلب غير صحيحة.",
+        },
+        { status: 400 }
+      );
+    }
+
     const email = body?.email;
 
-    const clean = String(email || "").trim().toLowerCase();
+    const clean = String(email || "")
+      .trim()
+      .toLowerCase();
 
+    // =========================
+    // 2. Validate email
+    // =========================
     if (!clean || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) {
       return NextResponse.json(
         {
@@ -24,6 +53,9 @@ export async function POST(request) {
       );
     }
 
+    // =========================
+    // 3. Validate university domain
+    // =========================
     if (!clean.endsWith(ALLOWED_EMAIL_DOMAIN)) {
       return NextResponse.json(
         {
@@ -34,9 +66,13 @@ export async function POST(request) {
       );
     }
 
+    // =========================
+    // 4. Read SMTP configuration
+    // =========================
     const host = process.env.SMTP_HOST?.trim();
     const user = process.env.SMTP_USER?.trim();
     const pass = process.env.SMTP_PASS?.trim();
+
     const port = Number(process.env.SMTP_PORT?.trim()) || 587;
 
     if (!host || !user || !pass) {
@@ -51,18 +87,32 @@ export async function POST(request) {
       );
     }
 
+    // =========================
+    // 5. Generate OTP
+    // =========================
     const code = crypto.randomInt(100000, 1000000).toString();
 
+    // =========================
+    // 6. Create transporter
+    // =========================
     const transporter = nodemailer.createTransport({
       host,
       port,
       secure: port === 465,
+
       auth: {
         user,
         pass,
       },
+
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
     });
 
+    // =========================
+    // 7. Verify SMTP
+    // =========================
     try {
       await transporter.verify();
     } catch (error) {
@@ -77,13 +127,19 @@ export async function POST(request) {
       );
     }
 
+    // =========================
+    // 8. Send email
+    // =========================
     try {
       await transporter.sendMail({
         from: `"تسجيل مشاريع AI Engineering" <${user}>`,
         to: clean,
+
         subject: "كود التحقق — تسجيل مشروع التخرج",
+
         html: `
-          <div dir="rtl"
+          <div
+            dir="rtl"
             style="
               font-family:Tahoma,Arial,sans-serif;
               font-size:15px;
@@ -92,6 +148,7 @@ export async function POST(request) {
               margin:auto;
             "
           >
+
             <h2>تأكيد الإيميل الجامعي</h2>
 
             <p>أهلًا،</p>
@@ -119,6 +176,7 @@ export async function POST(request) {
             <p style="color:#777;font-size:13px;">
               إذا لم تطلب هذا الكود، يمكنك تجاهل هذه الرسالة.
             </p>
+
           </div>
         `,
       });
@@ -134,7 +192,9 @@ export async function POST(request) {
       );
     }
 
-    // Save only after successful email delivery
+    // =========================
+    // 9. Save OTP
+    // =========================
     try {
       saveOtp(clean, code, 10);
     } catch (error) {
@@ -149,6 +209,9 @@ export async function POST(request) {
       );
     }
 
+    // =========================
+    // 10. Success
+    // =========================
     return NextResponse.json(
       {
         ok: true,
@@ -162,14 +225,20 @@ export async function POST(request) {
       }
     );
   } catch (error) {
-    console.error("[send-otp] failed:", error);
+    console.error("[send-otp] Unexpected error:", error);
 
     return NextResponse.json(
       {
         ok: false,
         error: "حصل خطأ أثناء إرسال كود التحقق.",
       },
-      { status: 500 }
+      {
+        status: 500,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      }
     );
   }
 }
+```
