@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export default function AdminRegistrationsPage() {
   const [password, setPassword] = useState("");
@@ -9,8 +9,13 @@ export default function AdminRegistrationsPage() {
   const [error, setError] = useState("");
   const [rows, setRows] = useState([]);
   const [openId, setOpenId] = useState(null);
-  const [downloadingId, setDownloadingId] = useState(null);
-  const [downloadError, setDownloadError] = useState("");
+
+  // الحذف
+  const [selected, setSelected] = useState(() => new Set());
+  const [confirm, setConfirm] = useState(null); // { kind: "ids" | "all", ids?, message }
+  const [confirmText, setConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [notice, setNotice] = useState(null); // { text, err }
 
   useEffect(() => {
     const saved = sessionStorage.getItem("admin_pw");
@@ -18,7 +23,13 @@ export default function AdminRegistrationsPage() {
       setPassword(saved);
       load(saved);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function flash(text, err = false) {
+    setNotice({ text, err });
+    setTimeout(() => setNotice(null), 4000);
+  }
 
   async function load(pw) {
     setLoading(true);
@@ -26,12 +37,18 @@ export default function AdminRegistrationsPage() {
     try {
       const res = await fetch("/api/admin/registrations", {
         headers: { "x-admin-password": pw },
+        cache: "no-store",
       });
       const body = await res.json();
       if (!res.ok || !body.ok) {
         throw new Error(body.error || "فشل تسجيل الدخول");
       }
       setRows(body.registrations);
+      // نشيل أي اختيار لصفوف مبقتش موجودة
+      setSelected((prev) => {
+        const alive = new Set(body.registrations.map((r) => r.id));
+        return new Set([...prev].filter((id) => alive.has(id)));
+      });
       setAuthed(true);
       sessionStorage.setItem("admin_pw", pw);
     } catch (err) {
@@ -48,36 +65,90 @@ export default function AdminRegistrationsPage() {
     load(password);
   }
 
-  // Fetches the exact PDF the student generated (stored server-side at
-  // registration time) and saves it — same technique the registration page
-  // itself uses, just pulling the file from our own API instead of jsPDF.
-  async function downloadPdf(id, titleEn) {
-    setDownloadError("");
-    setDownloadingId(id);
+  function logout() {
+    sessionStorage.removeItem("admin_pw");
+    setAuthed(false);
+    setPassword("");
+    setRows([]);
+    setSelected(new Set());
+  }
+
+  /* ---------- الاختيار ---------- */
+  const allSelected = useMemo(
+    () => rows.length > 0 && rows.every((r) => selected.has(r.id)),
+    [rows, selected]
+  );
+
+  function toggleOne(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)));
+  }
+
+  /* ---------- الحذف ---------- */
+  function askDeleteOne(r) {
+    setConfirmText("");
+    setConfirm({
+      kind: "ids",
+      ids: [r.id],
+      message: `هتحذف تسجيل "${r.title_en || r.title_ar || "بدون عنوان"}" نهائيًا. مينفعش تتراجع بعد كده.`,
+    });
+  }
+
+  function askDeleteSelected() {
+    if (selected.size === 0) return;
+    setConfirmText("");
+    setConfirm({
+      kind: "ids",
+      ids: [...selected],
+      message: `هتحذف ${selected.size} تسجيل نهائيًا. مينفعش تتراجع بعد كده.`,
+    });
+  }
+
+  function askDeleteAll() {
+    if (rows.length === 0) return;
+    setConfirmText("");
+    setConfirm({
+      kind: "all",
+      message: `هتحذف كل التسجيلات (${rows.length}) من قاعدة البيانات نهائيًا. اكتب كلمة  حذف  للتأكيد.`,
+    });
+  }
+
+  async function runDelete() {
+    if (!confirm) return;
+    if (confirm.kind === "all" && confirmText.trim() !== "حذف") return;
+
+    setDeleting(true);
     try {
-      const res = await fetch(`/api/admin/registrations/${id}/pdf`, {
-        headers: { "x-admin-password": password },
+      const res = await fetch("/api/admin/registrations", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": password,
+        },
+        body: JSON.stringify(confirm.kind === "all" ? { all: true } : { ids: confirm.ids }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || "الملف مش موجود.");
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${(titleEn || "project").replace(/[^a-z0-9\-_ ]/gi, "").trim().replace(/\s+/g, "_") || "project"}_Registration.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.ok) throw new Error(body.error || "فشل الحذف");
+
+      flash(`✓ اتحذف ${body.deleted} تسجيل`);
+      setConfirm(null);
+      setOpenId(null);
+      await load(password);
     } catch (err) {
-      setDownloadError(err.message);
+      flash(err.message, true);
     } finally {
-      setDownloadingId(null);
+      setDeleting(false);
     }
   }
 
+  /* ---------- شاشة الدخول ---------- */
   if (!authed) {
     return (
       <section className="flex min-h-screen items-center justify-center bg-[var(--bg)] px-6 transition-colors duration-300">
@@ -115,6 +186,7 @@ export default function AdminRegistrationsPage() {
     );
   }
 
+  /* ---------- اللوحة ---------- */
   return (
     <section className="min-h-screen bg-[var(--bg)] px-6 pb-20 pt-28 transition-colors duration-300 md:px-10">
       <div className="mx-auto max-w-6xl" dir="rtl">
@@ -125,19 +197,61 @@ export default function AdminRegistrationsPage() {
             </h1>
             <p className="text-sm text-[var(--fg-muted)]">من قاعدة بيانات الموقع مباشرة</p>
           </div>
-          <button
-            type="button"
-            onClick={() => load(password)}
-            className="rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-2 text-xs font-bold text-[var(--fg-muted)] hover:text-[var(--fg)]"
-          >
-            ↻ تحديث
-          </button>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => load(password)}
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-2 text-xs font-bold text-[var(--fg-muted)] hover:text-[var(--fg)]"
+            >
+              ↻ تحديث
+            </button>
+            <button
+              type="button"
+              onClick={logout}
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-2 text-xs font-bold text-[var(--fg-muted)] hover:text-[var(--fg)]"
+            >
+              خروج
+            </button>
+          </div>
         </div>
 
-        {downloadError && (
-          <p className="mb-4 rounded-lg bg-red-500/10 p-3 text-sm font-semibold text-red-600">
-            {downloadError}
-          </p>
+        {/* شريط أدوات الحذف */}
+        {rows.length > 0 && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-5 py-3">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-[var(--fg)]">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                className="h-4 w-4 accent-[var(--navy)]"
+              />
+              تحديد الكل
+              {selected.size > 0 && (
+                <span className="text-xs font-normal text-[var(--fg-muted)]">
+                  ({selected.size} محدد)
+                </span>
+              )}
+            </label>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={askDeleteSelected}
+                disabled={selected.size === 0}
+                className="rounded-full bg-red-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                🗑 حذف المحدد
+              </button>
+              <button
+                type="button"
+                onClick={askDeleteAll}
+                className="rounded-full border border-red-500/50 px-4 py-2 text-xs font-bold text-red-600 transition hover:bg-red-500/10"
+              >
+                حذف الكل
+              </button>
+            </div>
+          </div>
         )}
 
         {rows.length === 0 ? (
@@ -148,57 +262,82 @@ export default function AdminRegistrationsPage() {
           <div className="space-y-3">
             {rows.map((r) => {
               const open = openId === r.id;
-              const downloading = downloadingId === r.id;
+              const checked = selected.has(r.id);
               return (
                 <div
                   key={r.id}
-                  className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]"
+                  className={`overflow-hidden rounded-2xl border bg-[var(--surface)] ${
+                    checked ? "border-red-500/60" : "border-[var(--border)]"
+                  }`}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-3 p-5">
+                  <div className="flex items-stretch">
+                    <label className="flex cursor-pointer items-center px-4">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleOne(r.id)}
+                        className="h-4 w-4 accent-[var(--navy)]"
+                        aria-label="تحديد التسجيل"
+                      />
+                    </label>
+
                     <button
                       type="button"
                       onClick={() => setOpenId(open ? null : r.id)}
-                      className="min-w-0 flex-1 text-right"
+                      className="flex flex-1 flex-wrap items-center justify-between gap-3 py-5 pl-2 text-right"
                     >
-                      <p className="font-bold text-[var(--fg)]">
-                        {r.title_en || "(بدون عنوان)"}{" "}
-                        <span className="text-[var(--fg-muted)]">— {r.title_ar}</span>
-                      </p>
-                      <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
-                        <span className="rounded-full bg-[var(--gold-soft)] px-2.5 py-1 font-bold text-[var(--gold)]">
-                          ✉ {r.email}
-                        </span>
-                        <span className="text-[var(--fg-subtle)]">
-                          · {r.course_title} · {new Date(r.created_at).toLocaleString("ar-EG")}
-                        </span>
-                      </p>
+                      <div>
+                        <p className="font-bold text-[var(--fg)]">
+                          {r.title_en || "(بدون عنوان)"}{" "}
+                          <span className="text-[var(--fg-muted)]">— {r.title_ar}</span>
+                        </p>
+                        <p className="mt-1 text-xs text-[var(--fg-subtle)]">
+                          {r.email} · {r.course_title} ·{" "}
+                          {new Date(r.created_at).toLocaleString("ar-EG")}
+                        </p>
+                      </div>
+                      <span className="text-xs font-bold text-[var(--gold)]">
+                        {open ? "إخفاء التفاصيل ▲" : "عرض التفاصيل ▼"}
+                      </span>
                     </button>
 
-                    <div className="flex shrink-0 items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => downloadPdf(r.id, r.title_en)}
-                        disabled={downloading}
-                        className="flex items-center gap-1.5 rounded-full bg-[var(--navy)] px-4 py-2 text-xs font-bold text-white transition hover:bg-[var(--navy-light)] disabled:opacity-60"
+                    {r.has_pdf && (
+                      <a
+                        href={`/api/admin/registrations/${r.id}/pdf`}
+                        onClick={(e) => {
+                          // بنبعت الباسورد كـ header، فمينفعش نعتمد على الـ <a href>
+                          // العادي (اللي مبيبعتش headers) — بنعمل fetch يدوي ونفتح
+                          // الملف من blob بدل كده.
+                          e.preventDefault();
+                          fetch(`/api/admin/registrations/${r.id}/pdf`, {
+                            headers: { "x-admin-password": password },
+                          })
+                            .then(async (res) => {
+                              if (!res.ok) throw new Error("فشل تحميل الملف");
+                              const blob = await res.blob();
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement("a");
+                              a.href = url;
+                              a.download = `${r.title_en || r.title_ar || "registration"}_${r.id}.pdf`;
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            })
+                            .catch(() => flash("فشل تحميل الملف", true));
+                        }}
+                        title="تحميل ملف الـ PDF"
+                        className="flex items-center px-3 text-lg text-[var(--gold)] transition hover:bg-[var(--gold)]/10"
                       >
-                        {downloading ? (
-                          <>
-                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                            جارِ التحميل...
-                          </>
-                        ) : (
-                          <>⬇ تحميل PDF</>
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setOpenId(open ? null : r.id)}
-                        className="text-xs font-bold text-[var(--gold)]"
-                      >
-                        {open ? "إخفاء ▲" : "تفاصيل ▼"}
-                      </button>
-                    </div>
+                        📄
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => askDeleteOne(r)}
+                      title="حذف التسجيل"
+                      className="px-4 text-lg text-red-500 transition hover:bg-red-500/10"
+                    >
+                      🗑
+                    </button>
                   </div>
 
                   {open && (
@@ -227,6 +366,68 @@ export default function AdminRegistrationsPage() {
           </div>
         )}
       </div>
+
+      {/* رسالة نجاح/خطأ */}
+      {notice && (
+        <div
+          onClick={() => setNotice(null)}
+          className={`fixed bottom-6 left-1/2 z-50 w-[92%] max-w-md -translate-x-1/2 cursor-pointer rounded-xl px-6 py-3.5 text-center text-sm font-bold text-white shadow-2xl ${
+            notice.err ? "bg-red-600" : "bg-emerald-600"
+          }`}
+        >
+          {notice.text}
+        </div>
+      )}
+
+      {/* نافذة تأكيد الحذف */}
+      {confirm && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-6"
+          onClick={() => !deleting && setConfirm(null)}
+        >
+          <div
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-red-500/30 bg-[var(--surface)] p-6 shadow-2xl"
+          >
+            <div className="mb-3 flex items-center gap-2 text-red-600">
+              <span className="text-xl">⚠️</span>
+              <h3 className="text-base font-extrabold">تأكيد الحذف</h3>
+            </div>
+            <p className="mb-4 text-sm leading-7 text-[var(--fg)]">{confirm.message}</p>
+
+            {confirm.kind === "all" && (
+              <input
+                type="text"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="حذف"
+                autoFocus
+                className="mb-4 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-2.5 text-sm text-[var(--fg)] outline-none focus:border-red-500"
+              />
+            )}
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => setConfirm(null)}
+                className="rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-5 py-2.5 text-sm font-bold text-[var(--fg-muted)] transition hover:bg-[var(--border)] disabled:opacity-50"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={runDelete}
+                disabled={deleting || (confirm.kind === "all" && confirmText.trim() !== "حذف")}
+                className="rounded-full bg-red-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {deleting ? "جارِ الحذف..." : "أيوه، احذف"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

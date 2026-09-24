@@ -6,6 +6,8 @@ import { saveRegistration } from "../../lib/db";
 // This runs on the SERVER (never in the browser), so it's safe to use
 // SMTP credentials here — they're read from environment variables and
 // never sent to the client. See REGISTRATION_README.md for setup.
+export const maxDuration = 30;
+
 export async function POST(request) {
   try {
     // ── Real security check happens HERE, not in the browser ──
@@ -35,9 +37,17 @@ export async function POST(request) {
 
     // Persist the full submission — this is the permanent record, kept
     // regardless of whether the email to the admin succeeds below. The
-    // actual PDF file is saved to disk too, so the admin can download it
-    // later from /admin/registrations without depending on the email.
-    saveRegistration(session.email, data, pdfBase64);
+    // PDF itself is stored inside the database row (base64), so the
+    // admin can re-download it later from /admin/registrations without
+    // depending on the email having gone through.
+    let pdfBase64ForEmail = pdfBase64;
+    try {
+      await saveRegistration(session.email, data, pdfBase64);
+    } catch (dbErr) {
+      // لو الحفظ في القاعدة فشل، ما نوقفش الطلب هنا لأن الإيميل لسه ممكن
+      // يوصل — بس نسجّل الخطأ عشان يبان في الـ Logs.
+      console.error("[register] saveRegistration failed:", dbErr);
+    }
 
     const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ADMIN_EMAIL } = process.env;
 
@@ -59,7 +69,7 @@ export async function POST(request) {
         {
           ok: false,
           error:
-            "الإيميل مش متظبط على السيرفر لسه — تأكد إن ملف .env.local فيه SMTP_HOST و SMTP_USER و SMTP_PASS و ADMIN_EMAIL، وإنك عملت restart للسيرفر بعد ما ضفتهم.",
+            "الإيميل مش متظبط على السيرفر لسه — تأكد إن Environment Variables فيها SMTP_HOST و SMTP_USER و SMTP_PASS و ADMIN_EMAIL، وإنك عملت Redeploy بعد ما ضفتهم.",
         },
         { status: 500 }
       );
@@ -89,7 +99,7 @@ export async function POST(request) {
     }
 
     // pdfBase64 arrives as a data URI: "data:application/pdf;base64,XXXXX"
-    const base64Data = String(pdfBase64).split(",").pop();
+    const base64Data = String(pdfBase64ForEmail).split(",").pop();
 
     const esc = (s) =>
       String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

@@ -1,6 +1,8 @@
 import { verifyOtp } from "../../../lib/db";
 import { createSessionToken } from "../../../lib/session";
 
+export const maxDuration = 30;
+
 export async function POST(request) {
   try {
     const { email, code } = await request.json();
@@ -11,7 +13,7 @@ export async function POST(request) {
       return Response.json({ ok: false, error: "اكتب الإيميل والكود." }, { status: 400 });
     }
 
-    const result = verifyOtp(clean, cleanCode);
+    const result = await verifyOtp(clean, cleanCode);
     if (!result.ok) {
       return Response.json({ ok: false, error: result.reason }, { status: 400 });
     }
@@ -22,7 +24,9 @@ export async function POST(request) {
     const res = Response.json({ ok: true, email: clean });
     res.headers.append(
       "Set-Cookie",
-      `reg_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60}`
+      `reg_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60}${
+        process.env.NODE_ENV === "production" ? "; Secure" : ""
+      }`
     );
     return res;
   } catch (err) {

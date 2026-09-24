@@ -5,6 +5,8 @@ import { saveOtp } from "../../../lib/db";
 // Change this to your actual university student-email domain.
 const ALLOWED_EMAIL_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || "@std.mans.edu.eg").toLowerCase();
 
+export const maxDuration = 30;
+
 export async function POST(request) {
   try {
     const { email } = await request.json();
@@ -39,7 +41,7 @@ export async function POST(request) {
     }
 
     const code = String(crypto.randomInt(100000, 999999));
-    saveOtp(clean, code, 10);
+    await saveOtp(clean, code, 10);
 
     const transporter = nodemailer.createTransport({
       host,

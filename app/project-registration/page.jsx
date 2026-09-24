@@ -208,21 +208,21 @@ function renderPdfPages(refs, data) {
     ${pdfHead()}
     <p class="pg-title">Graduation Project Template</p>
     <p style="font-size:12px;font-weight:800;">Course Title: <span style="font-weight:400;">${esc(data.courseTitle)}</span></p>
-    <p class="sec-h" style="text-decoration:none;">عنوان المشروع باللغة العربية:</p>
+    <p class="sec-h sec-ar" style="text-decoration:none;">عنوان المشروع باللغة العربية:</p>
     <p class="arb" style="text-align:center;font-weight:800;font-size:14px;">${esc(data.titleAr)}</p>
     <p class="sec-h" style="text-decoration:none;margin-top:14px;">Project Title:</p>
     <p style="text-align:center;font-weight:800;font-size:14px;">${esc(data.titleEn)}</p>
 
-    <p class="sec-h">فريق الإشراف (في حالة تحديد مشرف للمشروع)</p>
+    <p class="sec-h sec-ar">فريق الإشراف (في حالة تحديد مشرف للمشروع)</p>
     <table dir="rtl"><thead><tr><th style="width:36px;">م</th><th>الاسم</th><th style="width:110px;">التوقيع</th></tr></thead><tbody>${supRows}</tbody></table>
 
-    <p class="sec-h">معلومات أساسية عن مقترح المشروع المقدم</p>
+    <p class="sec-h sec-ar">معلومات أساسية عن مقترح المشروع المقدم</p>
     <table dir="rtl"><thead><tr><th style="width:36px;">م</th><th>السؤال</th><th style="width:50px;">نعم</th><th style="width:50px;">لا</th></tr></thead><tbody>${ynRows}</tbody></table>
 
     <p class="sec-h">Project Team</p>
     <table dir="rtl"><thead><tr><th style="width:36px;">م</th><th>الاسم رباعي باللغة العربية</th><th style="width:130px;">الساعات المكتسبة</th><th style="width:70px;">GPA</th></tr></thead><tbody>${teamRows}</tbody></table>
 
-    <p class="sec-h">قائد فريق المشروع (Team Leader)</p>
+    <p class="sec-h sec-ar">قائد فريق المشروع (Team Leader)</p>
     <table dir="rtl">
       <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th style="width:120px;">رقم الموبايل</th></tr></thead>
       <tbody><tr><td class="arb">${esc(data.leaderName)}</td><td>${esc(data.leaderEmail)}</td><td class="center">${esc(data.leaderPhone)}</td></tr></tbody>
@@ -330,12 +330,30 @@ function renderPdfPages(refs, data) {
     <p class="sec-h">SPONSORS:</p>
     <table><thead><tr><th style="width:36px;">No.</th><th>Sponsor</th></tr></thead><tbody>${sponsorRows}</tbody></table>
 
-    <p class="sec-h" style="color:#c0392b;">قواعد عامة</p>
+    <p class="sec-h sec-ar" style="color:#c0392b;">قواعد عامة</p>
     <ol class="rule-list" dir="rtl">
       <li>يتم قبول المشروع أو رفضه بناءً على ما تقدم من معلومات ومدى أهمية المشروع من عدمه وفقاً لتخصص هندسة الذكاء الاصطناعي.</li>
       <li>يتم عمل تقييم للمشروع في الأسبوع السادس من الدراسة حيث يتم عقد لجنة استماع للمشاريع للتأكد من تحقيق المعايير، وفي حالة عدم تحقيق المعايير يتم إيقاف الدعم المالي للمشاريع التي حصلت على دعم وسيكون أقصى تقدير للطلاب B، ثم يتم إعادة تقييم مرة أخرى في الأسبوع الحادي عشر من الدراسة من خلال عقد لجنة استماع أخرى، وفي حالة تصحيح المسار وتحقيق المعايير فلن يكون هناك قيود على أقصى تقدير سيحصل عليه الطلاب.</li>
     </ol>
     <div class="decision-box">القرار النهائي للجنة المشاريع بالبرنامج<br/><span style="font-weight:400;font-size:11px;">قبول المشروع &nbsp; | &nbsp; رفض المشروع</span></div>
+
+    <div class="sig-row" dir="rtl">
+      <div class="sig-box">
+        <div class="sig-title">توقيع قائد الفريق</div>
+        <div class="sig-space"></div>
+        <div class="sig-name">${esc(data.leaderName)}</div>
+      </div>
+      <div class="sig-box">
+        <div class="sig-title">توقيع المشرف</div>
+        <div class="sig-space"></div>
+        <div class="sig-name"></div>
+      </div>
+      <div class="sig-box">
+        <div class="sig-title">توقيع إدارة البرنامج</div>
+        <div class="sig-space"></div>
+        <div class="sig-name"></div>
+      </div>
+    </div>
     ${pdfFoot(6)}`;
 }
 
@@ -355,7 +373,7 @@ function waitForImages(container) {
   );
 }
 
-async function buildPdf(refs, data) {
+async function buildPdf(refs, data, { scale = 2, quality = 0.95 } = {}) {
   renderPdfPages(refs, data);
   await new Promise((r) => setTimeout(r, 60));
 
@@ -372,11 +390,11 @@ async function buildPdf(refs, data) {
 
   for (let i = 0; i < pages.length; i++) {
     const canvas = await html2canvas(pages[i].current, {
-      scale: 2,
+      scale,
       useCORS: true,
       backgroundColor: "#ffffff",
     });
-    const img = canvas.toDataURL("image/jpeg", 0.95);
+    const img = canvas.toDataURL("image/jpeg", quality);
 
     // Pages normally match standard A4, but page 1 can grow taller than the
     // template's default height when a team has many members (up to 11) —
@@ -408,8 +426,11 @@ async function buildPdf(refs, data) {
 // route, which emails a copy to the admin. This never blocks or fails the
 // student's download — if the email can't be sent (e.g. SMTP isn't
 // configured yet on the server), we just log it and let the person know.
-async function sendCopyToAdmin(data, pdf) {
-  const pdfBase64 = pdf.output("datauristring");
+// ملحوظة Vercel: أقصى حجم للـ request body هو 4.5MB، فلو الـ PDF كبير
+// (base64) بنبعت نسخة أخف للإدارة بدل ما الطلب يترفض.
+const MAX_EMAIL_PAYLOAD_CHARS = 3_500_000;
+
+async function sendCopyToAdmin(data, pdfBase64) {
   const res = await fetch("/api/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -541,8 +562,8 @@ export default function ProjectRegistrationPage() {
     };
   }
 
-  // Every part of the form is mandatory — this checks all of it and
-  // returns a list of what's still missing (empty array = complete).
+  // كل أجزاء الفورم إجبارية ما عدا (Schedule / Software / Hardware / Budget / Sponsors) — بيتحقق منها وبيرجّع
+  // قايمة بالناقص (مصفوفة فاضية = كله تمام).
   function getMissingFields(data) {
     const missing = [];
 
@@ -568,11 +589,7 @@ export default function ProjectRegistrationPage() {
     if (!data.keywords.length) missing.push("الكلمات المفتاحية (اختار كلمة واحدة على الأقل)");
     if (!data.abstract) missing.push("Project Abstract");
 
-    if (data.schedule.some((t) => !t)) missing.push("كل مهام Time Schedule (8 أسابيع)");
-    if (Object.values(data.sw).some((v) => !v.trim())) missing.push("كل أقسام Software Tools");
-    if (!data.hardware) missing.push("Hardware Tools");
-    if (data.budget.some((b) => !b.item || !b.price)) missing.push("كل بنود Budget Analysis");
-    if (data.sponsors.some((s) => !s)) missing.push("كل بيانات Sponsors");
+    // Time Schedule / Software / Hardware / Budget / Sponsors — اختيارية، مفيش تحقق عليها
 
     return missing;
   }
@@ -633,7 +650,12 @@ export default function ProjectRegistrationPage() {
       pdf.save(`${safeName}_Registration.pdf`);
 
       try {
-        await sendCopyToAdmin(data, pdf);
+        let pdfBase64 = pdf.output("datauristring");
+        if (pdfBase64.length > MAX_EMAIL_PAYLOAD_CHARS) {
+          const light = await buildPdf(refs, data, { scale: 1.4, quality: 0.7 });
+          pdfBase64 = light.pdf.output("datauristring");
+        }
+        await sendCopyToAdmin(data, pdfBase64);
         showToast("✓ اتنزّل الملف عندك، ووصلت نسخة لإدارة القسم كمان");
       } catch (mailErr) {
         console.error(mailErr);
@@ -1054,7 +1076,7 @@ export default function ProjectRegistrationPage() {
             )}
           </Card>
 
-          <Card n="11" title="Time Schedule" hint="8 أسابيع — كل أسبوع مطلوب">
+          <Card n="11" title="Time Schedule" hint="8 أسابيع — اختياري">
             {SCHEDULE_HINTS.map((hint, i) => (
               <div key={i} className="mb-2 grid grid-cols-[90px_1fr] items-center gap-3">
                 <span className="rounded-lg bg-[var(--surface-soft)] py-2 text-center text-xs font-extrabold text-[var(--navy)] dark:text-[var(--gold)]">
@@ -1065,13 +1087,12 @@ export default function ProjectRegistrationPage() {
                   className="week-task rt-input"
                   dir="ltr"
                   placeholder={hint}
-                  required
                 />
               </div>
             ))}
           </Card>
 
-          <Card n="12" title="Required Software Tools" hint="اكتب أدوات مشروعك في كل قسم — كل الأقسام مطلوبة">
+          <Card n="12" title="Required Software Tools" hint="اكتب أدوات مشروعك في الأقسام اللي تخصك — اختياري">
             {SW_CATS.map((cat) => (
               <div key={cat.key} className="mb-4">
                 <label className="mb-1.5 block text-sm font-extrabold text-[var(--navy)] dark:text-[var(--gold)]">
@@ -1083,13 +1104,12 @@ export default function ProjectRegistrationPage() {
                   dir="ltr"
                   style={{ minHeight: 66 }}
                   placeholder={cat.hint}
-                  required
                 />
               </div>
             ))}
           </Card>
 
-          <Card n="13" title="Required Hardware Tools" hint="مطلوب">
+          <Card n="13" title="Required Hardware Tools" hint="اختياري">
             <Field>
               <textarea
                 id="hardware"
@@ -1097,12 +1117,11 @@ export default function ProjectRegistrationPage() {
                 className="rt-input"
                 style={{ minHeight: 110 }}
                 placeholder={HARDWARE_HINT}
-                required
               />
             </Field>
           </Card>
 
-          <Card n="14" title="Budget Analysis" hint="كل الـ 6 بنود مطلوبة — الإجمالي بيتحسب أوتوماتيك لو الأسعار أرقام">
+          <Card n="14" title="Budget Analysis" hint="اختياري — الإجمالي بيتحسب أوتوماتيك لو الأسعار أرقام">
             <table className="rt-table" dir="ltr">
               <thead>
                 <tr>
@@ -1121,7 +1140,6 @@ export default function ProjectRegistrationPage() {
                         className="budget-item rt-cell-input"
                         dir="ltr"
                         placeholder="Item"
-                        required
                       />
                     </td>
                     <td>
@@ -1130,7 +1148,6 @@ export default function ProjectRegistrationPage() {
                         className="budget-price rt-cell-input"
                         dir="ltr"
                         placeholder="Price"
-                        required
                       />
                     </td>
                   </tr>
@@ -1139,7 +1156,7 @@ export default function ProjectRegistrationPage() {
             </table>
           </Card>
 
-          <Card n="15" title="Sponsors" hint="كل الـ 3 صفوف مطلوبة">
+          <Card n="15" title="Sponsors" hint="اختياري">
             <table className="rt-table" dir="ltr">
               <thead>
                 <tr>
@@ -1152,7 +1169,7 @@ export default function ProjectRegistrationPage() {
                   <tr key={i}>
                     <td className="rt-center">{i}</td>
                     <td>
-                      <input type="text" className="sponsor-name rt-cell-input" dir="ltr" required />
+                      <input type="text" className="sponsor-name rt-cell-input" dir="ltr" />
                     </td>
                   </tr>
                 ))}
@@ -1361,6 +1378,15 @@ export default function ProjectRegistrationPage() {
           text-decoration: underline;
           margin: 14px 0 8px;
         }
+        /* العناوين: الإنجليزي شمال (LTR) — العربي يمين (RTL) */
+        .pg .sec-h {
+          direction: ltr;
+          text-align: left;
+        }
+        .pg .sec-h.sec-ar {
+          direction: rtl;
+          text-align: right;
+        }
         .pg table {
           width: 100%;
           border-collapse: collapse;
@@ -1439,6 +1465,37 @@ export default function ProjectRegistrationPage() {
         }
         .rule-list li {
           margin-bottom: 8px;
+        }
+        .sig-row {
+          display: flex;
+          gap: 14px;
+          margin-top: 22px;
+        }
+        .sig-box {
+          flex: 1;
+          border: 1px solid #9aa8bd;
+          border-radius: 6px;
+          overflow: hidden;
+          text-align: center;
+        }
+        .sig-title {
+          background: #dbe4f0;
+          color: #06265b;
+          font-size: 12px;
+          font-weight: 800;
+          padding: 6px;
+          border-bottom: 1px solid #9aa8bd;
+        }
+        .sig-space {
+          height: 58px;
+        }
+        .sig-name {
+          margin: 0 12px 8px;
+          padding-top: 6px;
+          border-top: 1px dashed #9aa8bd;
+          min-height: 16px;
+          font-size: 11px;
+          font-weight: 700;
         }
         .decision-box {
           border: 1.5px solid #9aa8bd;

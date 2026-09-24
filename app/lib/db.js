@@ -1,178 +1,242 @@
-import Database from "better-sqlite3";
-import path from "path";
-import fs from "fs";
+import { neon } from "@neondatabase/serverless";
 
-// One local file holds everything — no external database account needed.
-// In production behind a normal Node server (not a serverless/edge
-// platform) this file just lives on disk and persists across restarts.
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "registrations.db");
-const PDF_DIR = path.join(DATA_DIR, "pdfs");
+// ─────────────────────────────────────────────────────────────
+// Postgres (Neon) — بديل SQLite.
+// ليه اتغيّر؟ Vercel بيشغّل الكود على serverless functions: مفيش
+// ديسك دايم، فأي ملف .db أو ملف PDF محفوظ على الفايل سيستم بيتمسح
+// أو مينفعش يتكتب. لازم قاعدة بيانات خارجية + تخزين ملف الـ PDF
+// جوه القاعدة نفسها (base64 في عمود TEXT) بدل الديسك.
+// ─────────────────────────────────────────────────────────────
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(PDF_DIR)) fs.mkdirSync(PDF_DIR, { recursive: true });
+let _sql = null;
+function getSql() {
+  if (_sql) return _sql;
+  const url = (process.env.DATABASE_URL || process.env.POSTGRES_URL || "").trim();
+  if (!url) {
+    throw new Error(
+      "DATABASE_URL مش متظبط — اربط قاعدة Neon من تاب Storage في Vercel (أو ضيفه في .env.local لو شغّال لوكال)."
+    );
+  }
+  _sql = neon(url);
+  return _sql;
+}
 
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
+// بيعمل الجداول أول مرة بس (لكل instance)، ولو فشل بيحاول تاني في الطلب الجاي.
+let _schemaPromise = null;
+function ensureSchema() {
+  if (!_schemaPromise) {
+    _schemaPromise = (async () => {
+      const sql = getSql();
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS otp_codes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL,
-    code TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    used INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL
-  );
+      await sql`
+        CREATE TABLE IF NOT EXISTS otp_codes (
+          id SERIAL PRIMARY KEY,
+          email TEXT NOT NULL,
+          code TEXT NOT NULL,
+          expires_at BIGINT NOT NULL,
+          used INTEGER NOT NULL DEFAULT 0,
+          created_at BIGINT NOT NULL
+        )
+      `;
 
-  CREATE TABLE IF NOT EXISTS registrations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL,
-    title_ar TEXT,
-    title_en TEXT,
-    course_title TEXT,
-    required_hours INTEGER,
-    leader_name TEXT,
-    leader_email TEXT,
-    leader_phone TEXT,
-    goal TEXT,
-    ai_link TEXT,
-    community_service TEXT,
-    abstract TEXT,
-    keywords TEXT,        -- JSON array
-    supervisors TEXT,     -- JSON array
-    yn TEXT,               -- JSON array
-    team TEXT,              -- JSON array
-    schedule TEXT,          -- JSON array
-    software_tools TEXT,    -- JSON object
-    hardware TEXT,
-    budget TEXT,             -- JSON array
-    sponsors TEXT,           -- JSON array
-    pdf_filename TEXT,       -- filename inside data/pdfs/, added via migration below
-    created_at INTEGER NOT NULL
-  );
-`);
+      await sql`
+        CREATE TABLE IF NOT EXISTS registrations (
+          id SERIAL PRIMARY KEY,
+          email TEXT NOT NULL,
+          title_ar TEXT,
+          title_en TEXT,
+          course_title TEXT,
+          required_hours INTEGER,
+          leader_name TEXT,
+          leader_email TEXT,
+          leader_phone TEXT,
+          goal TEXT,
+          ai_link TEXT,
+          community_service TEXT,
+          abstract TEXT,
+          keywords TEXT,
+          supervisors TEXT,
+          yn TEXT,
+          team TEXT,
+          schedule TEXT,
+          software_tools TEXT,
+          hardware TEXT,
+          budget TEXT,
+          sponsors TEXT,
+          pdf_base64 TEXT,
+          created_at BIGINT NOT NULL
+        )
+      `;
 
-// Migration: older databases created before this feature existed won't
-// have the pdf_filename column yet — add it if missing, without touching
-// any existing data.
-const existingCols = db.prepare(`PRAGMA table_info(registrations)`).all();
-if (!existingCols.some((c) => c.name === "pdf_filename")) {
-  db.exec(`ALTER TABLE registrations ADD COLUMN pdf_filename TEXT`);
+      // Migration: لو الجدول كان موجود قبل ما عمود الـ PDF يتضاف
+      await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS pdf_base64 TEXT`;
+    })().catch((err) => {
+      _schemaPromise = null;
+      throw err;
+    });
+  }
+  return _schemaPromise;
+}
+
+async function db() {
+  await ensureSchema();
+  return getSql();
 }
 
 /* ---------------- OTP ---------------- */
 
-export function saveOtp(email, code, ttlMinutes = 10) {
-  const expiresAt = Date.now() + ttlMinutes * 60 * 1000;
-  db.prepare(
-    `INSERT INTO otp_codes (email, code, expires_at, created_at) VALUES (?, ?, ?, ?)`
-  ).run(email, code, expiresAt, Date.now());
+export async function saveOtp(email, code, ttlMinutes = 10) {
+  const sql = await db();
+  const now = Date.now();
+  const expiresAt = now + ttlMinutes * 60 * 1000;
+
+  // تنضيف الأكواد المنتهية القديمة عشان الجدول ما يكبرش
+  await sql`DELETE FROM otp_codes WHERE expires_at < ${now - 24 * 60 * 60 * 1000}`;
+
+  await sql`
+    INSERT INTO otp_codes (email, code, expires_at, created_at)
+    VALUES (${email}, ${code}, ${expiresAt}, ${now})
+  `;
 }
 
-// Verifies a code and marks it used (one-time use). Returns { ok, reason }.
-export function verifyOtp(email, code) {
-  const row = db
-    .prepare(
-      `SELECT * FROM otp_codes WHERE email = ? AND code = ? AND used = 0 ORDER BY id DESC LIMIT 1`
-    )
-    .get(email, code);
+// بيتحقق من الكود وبيعلّمه "مستخدم" (استخدام مرة واحدة). Returns { ok, reason }.
+export async function verifyOtp(email, code) {
+  const sql = await db();
+
+  const rows = await sql`
+    SELECT id, expires_at FROM otp_codes
+    WHERE email = ${email} AND code = ${code} AND used = 0
+    ORDER BY id DESC LIMIT 1
+  `;
+  const row = rows[0];
 
   if (!row) return { ok: false, reason: "الكود غلط." };
-  if (row.expires_at < Date.now()) {
+  if (Number(row.expires_at) < Date.now()) {
     return { ok: false, reason: "الكود منتهي — اطلب كود جديد." };
   }
 
-  db.prepare(`UPDATE otp_codes SET used = 1 WHERE id = ?`).run(row.id);
+  // WHERE used = 0 بيضمن إن الكود يتستخدم مرة واحدة حتى لو جه طلبين مع بعض
+  const updated = await sql`
+    UPDATE otp_codes SET used = 1 WHERE id = ${row.id} AND used = 0 RETURNING id
+  `;
+  if (updated.length === 0) return { ok: false, reason: "الكود غلط." };
+
   return { ok: true };
 }
 
 /* ---------------- Registrations ---------------- */
 
-// Saves the registration row AND the actual PDF file (decoded from the
-// "data:application/pdf;base64,...." string sent by the client), so the
-// admin page can download the exact document the student generated.
-export function saveRegistration(email, data, pdfBase64) {
-  const info = db
-    .prepare(
-      `INSERT INTO registrations (
-        email, title_ar, title_en, course_title, required_hours,
-        leader_name, leader_email, leader_phone, goal, ai_link, community_service,
-        abstract, keywords, supervisors, yn, team, schedule, software_tools,
-        hardware, budget, sponsors, pdf_filename, created_at
-      ) VALUES (?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?)`
+// بيحفظ صف التسجيل + ملف الـ PDF نفسه (base64) في نفس الصف — عشان
+// لوحة الأدمن تقدر تنزّل نفس الملف اللي الطالب ولّده، من غير ما
+// نعتمد على ديسك (مش موجود أصلًا على Vercel).
+export async function saveRegistration(email, data, pdfBase64) {
+  const sql = await db();
+
+  const rows = await sql`
+    INSERT INTO registrations (
+      email, title_ar, title_en, course_title, required_hours,
+      leader_name, leader_email, leader_phone, goal, ai_link, community_service,
+      abstract, keywords, supervisors, yn, team, schedule, software_tools,
+      hardware, budget, sponsors, pdf_base64, created_at
+    ) VALUES (
+      ${email},
+      ${data.titleAr || ""},
+      ${data.titleEn || ""},
+      ${data.courseTitle || ""},
+      ${data.requiredHours || null},
+      ${data.leaderName || ""},
+      ${data.leaderEmail || ""},
+      ${data.leaderPhone || ""},
+      ${data.goal || ""},
+      ${data.aiLink || ""},
+      ${data.communityService || ""},
+      ${data.abstract || ""},
+      ${JSON.stringify(data.keywords || [])},
+      ${JSON.stringify(data.supervisors || [])},
+      ${JSON.stringify(data.yn || [])},
+      ${JSON.stringify(data.team || [])},
+      ${JSON.stringify(data.schedule || [])},
+      ${JSON.stringify(data.sw || {})},
+      ${data.hardware || ""},
+      ${JSON.stringify(data.budget || [])},
+      ${JSON.stringify(data.sponsors || [])},
+      ${pdfBase64 || null},
+      ${Date.now()}
     )
-    .run(
-      email,
-      data.titleAr || "",
-      data.titleEn || "",
-      data.courseTitle || "",
-      data.requiredHours || null,
-      data.leaderName || "",
-      data.leaderEmail || "",
-      data.leaderPhone || "",
-      data.goal || "",
-      data.aiLink || "",
-      data.communityService || "",
-      data.abstract || "",
-      JSON.stringify(data.keywords || []),
-      JSON.stringify(data.supervisors || []),
-      JSON.stringify(data.yn || []),
-      JSON.stringify(data.team || []),
-      JSON.stringify(data.schedule || []),
-      JSON.stringify(data.sw || {}),
-      data.hardware || "",
-      JSON.stringify(data.budget || []),
-      JSON.stringify(data.sponsors || []),
-      null, // pdf_filename set below once we know the row's id
-      Date.now()
-    );
-
-  const id = info.lastInsertRowid;
-
-  if (pdfBase64) {
-    try {
-      const base64Data = String(pdfBase64).split(",").pop();
-      const buffer = Buffer.from(base64Data, "base64");
-      const filename = `${id}.pdf`;
-      fs.writeFileSync(path.join(PDF_DIR, filename), buffer);
-      db.prepare(`UPDATE registrations SET pdf_filename = ? WHERE id = ?`).run(filename, id);
-    } catch (err) {
-      // A PDF write failure shouldn't lose the registration data itself.
-      console.error("[db] failed to save PDF file for registration", id, err);
-    }
-  }
-
-  return id;
+    RETURNING id
+  `;
+  return rows[0]?.id;
 }
 
-export function listRegistrations() {
-  const rows = db
-    .prepare(`SELECT * FROM registrations ORDER BY created_at DESC`)
-    .all();
+function safeParse(str, fallback) {
+  try {
+    return JSON.parse(str || "");
+  } catch {
+    return fallback;
+  }
+}
+
+// بيرجّع كل التسجيلات لكن من غير عمود الـ PDF نفسه (عشان الرد يفضل
+// خفيف) — بس بيقول هل فيه PDF محفوظ ولا لأ (has_pdf) عشان الفرونت
+// يظهر زرار التحميل بس لو فعلًا موجود.
+export async function listRegistrations() {
+  const sql = await db();
+  const rows = await sql`
+    SELECT
+      id, email, title_ar, title_en, course_title, required_hours,
+      leader_name, leader_email, leader_phone, goal, ai_link, community_service,
+      abstract, keywords, supervisors, yn, team, schedule, software_tools,
+      hardware, budget, sponsors, created_at,
+      (pdf_base64 IS NOT NULL) AS has_pdf
+    FROM registrations
+    ORDER BY created_at DESC
+  `;
 
   return rows.map((r) => ({
     ...r,
-    keywords: JSON.parse(r.keywords || "[]"),
-    supervisors: JSON.parse(r.supervisors || "[]"),
-    yn: JSON.parse(r.yn || "[]"),
-    team: JSON.parse(r.team || "[]"),
-    schedule: JSON.parse(r.schedule || "[]"),
-    software_tools: JSON.parse(r.software_tools || "{}"),
-    budget: JSON.parse(r.budget || "[]"),
-    sponsors: JSON.parse(r.sponsors || "[]"),
+    id: Number(r.id),
+    created_at: Number(r.created_at),
+    keywords: safeParse(r.keywords, []),
+    supervisors: safeParse(r.supervisors, []),
+    yn: safeParse(r.yn, []),
+    team: safeParse(r.team, []),
+    schedule: safeParse(r.schedule, []),
+    software_tools: safeParse(r.software_tools, {}),
+    budget: safeParse(r.budget, []),
+    sponsors: safeParse(r.sponsors, []),
   }));
 }
 
-// Returns the absolute path to a registration's stored PDF, or null if
-// there isn't one (e.g. the write failed at submission time).
-export function getRegistrationPdfPath(id) {
-  const row = db
-    .prepare(`SELECT pdf_filename FROM registrations WHERE id = ?`)
-    .get(id);
-  if (!row || !row.pdf_filename) return null;
-  const fullPath = path.join(PDF_DIR, row.pdf_filename);
-  return fs.existsSync(fullPath) ? fullPath : null;
+// بيرجّع { base64, titleEn, titleAr } لتسجيل معيّن، أو null لو مفيش PDF محفوظ.
+export async function getRegistrationPdf(id) {
+  const sql = await db();
+  const rows = await sql`
+    SELECT pdf_base64, title_en, title_ar
+    FROM registrations WHERE id = ${Number(id)}
+  `;
+  const row = rows[0];
+  if (!row || !row.pdf_base64) return null;
+  return { base64: row.pdf_base64, titleEn: row.title_en, titleAr: row.title_ar };
 }
 
-export default db;
+// حذف تسجيل واحد أو أكتر — بيرجّع عدد الصفوف اللي اتمسحت فعلًا
+export async function deleteRegistrations(ids) {
+  const clean = [...new Set((ids || []).map(Number))].filter(
+    (n) => Number.isInteger(n) && n > 0
+  );
+  if (clean.length === 0) return 0;
+
+  const sql = await db();
+  const rows = await sql.query(
+    "DELETE FROM registrations WHERE id = ANY($1::int[]) RETURNING id",
+    [clean]
+  );
+  return rows.length;
+}
+
+// حذف كل التسجيلات
+export async function deleteAllRegistrations() {
+  const sql = await db();
+  const rows = await sql`DELETE FROM registrations RETURNING id`;
+  return rows.length;
+}
