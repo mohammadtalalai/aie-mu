@@ -1,430 +1,178 @@
-import { neon } from "@neondatabase/serverless";
-import { put } from "@vercel/blob";
+import Database from "better-sqlite3";
+import path from "path";
+import fs from "fs";
 
-/*
-|--------------------------------------------------------------------------
-| Neon Database
-|--------------------------------------------------------------------------
-*/
+// One local file holds everything — no external database account needed.
+// In production behind a normal Node server (not a serverless/edge
+// platform) this file just lives on disk and persists across restarts.
+const DATA_DIR = path.join(process.cwd(), "data");
+const DB_PATH = path.join(DATA_DIR, "registrations.db");
+const PDF_DIR = path.join(DATA_DIR, "pdfs");
 
-const DATABASE_URL = process.env.DATABASE_URL;
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(PDF_DIR)) fs.mkdirSync(PDF_DIR, { recursive: true });
 
-if (!DATABASE_URL) {
-  console.warn(
-    "[db] DATABASE_URL is not configured. Database operations will fail."
+const db = new Database(DB_PATH);
+db.pragma("journal_mode = WAL");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS otp_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    code TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS registrations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    title_ar TEXT,
+    title_en TEXT,
+    course_title TEXT,
+    required_hours INTEGER,
+    leader_name TEXT,
+    leader_email TEXT,
+    leader_phone TEXT,
+    goal TEXT,
+    ai_link TEXT,
+    community_service TEXT,
+    abstract TEXT,
+    keywords TEXT,        -- JSON array
+    supervisors TEXT,     -- JSON array
+    yn TEXT,               -- JSON array
+    team TEXT,              -- JSON array
+    schedule TEXT,          -- JSON array
+    software_tools TEXT,    -- JSON object
+    hardware TEXT,
+    budget TEXT,             -- JSON array
+    sponsors TEXT,           -- JSON array
+    pdf_filename TEXT,       -- filename inside data/pdfs/, added via migration below
+    created_at INTEGER NOT NULL
+  );
+`);
+
+// Migration: older databases created before this feature existed won't
+// have the pdf_filename column yet — add it if missing, without touching
+// any existing data.
+const existingCols = db.prepare(`PRAGMA table_info(registrations)`).all();
+if (!existingCols.some((c) => c.name === "pdf_filename")) {
+  db.exec(`ALTER TABLE registrations ADD COLUMN pdf_filename TEXT`);
 }
 
-const sql = neon(DATABASE_URL || "");
+/* ---------------- OTP ---------------- */
 
-/*
-|--------------------------------------------------------------------------
-| Database Initialization
-|--------------------------------------------------------------------------
-*/
-
-let databaseInitialized = false;
-let databaseInitializationPromise = null;
-
-async function ensureDatabase() {
-  if (databaseInitialized) {
-    return;
-  }
-
-  if (!databaseInitializationPromise) {
-    databaseInitializationPromise = (async () => {
-      await sql`
-        CREATE TABLE IF NOT EXISTS otp_codes (
-          id BIGSERIAL PRIMARY KEY,
-          email TEXT NOT NULL,
-          code TEXT NOT NULL,
-          expires_at BIGINT NOT NULL,
-          used BOOLEAN NOT NULL DEFAULT FALSE,
-          created_at BIGINT NOT NULL
-        )
-      `;
-
-      await sql`
-        CREATE INDEX IF NOT EXISTS idx_otp_email
-        ON otp_codes(email)
-      `;
-
-      await sql`
-        CREATE TABLE IF NOT EXISTS registrations (
-          id BIGSERIAL PRIMARY KEY,
-
-          email TEXT NOT NULL,
-
-          title_ar TEXT,
-          title_en TEXT,
-          course_title TEXT,
-          required_hours INTEGER,
-
-          leader_name TEXT,
-          leader_email TEXT,
-          leader_phone TEXT,
-
-          goal TEXT,
-          ai_link TEXT,
-          community_service TEXT,
-          abstract TEXT,
-
-          keywords TEXT,
-          supervisors TEXT,
-          yn TEXT,
-          team TEXT,
-          schedule TEXT,
-          software_tools TEXT,
-
-          hardware TEXT,
-          budget TEXT,
-          sponsors TEXT,
-
-          pdf_path TEXT,
-
-          created_at BIGINT NOT NULL
-        )
-      `;
-
-      await sql`
-        CREATE INDEX IF NOT EXISTS idx_registrations_created_at
-        ON registrations(created_at DESC)
-      `;
-
-      databaseInitialized = true;
-    })().catch((error) => {
-      databaseInitializationPromise = null;
-      throw error;
-    });
-  }
-
-  await databaseInitializationPromise;
+export function saveOtp(email, code, ttlMinutes = 10) {
+  const expiresAt = Date.now() + ttlMinutes * 60 * 1000;
+  db.prepare(
+    `INSERT INTO otp_codes (email, code, expires_at, created_at) VALUES (?, ?, ?, ?)`
+  ).run(email, code, expiresAt, Date.now());
 }
 
-/*
-|--------------------------------------------------------------------------
-| Safe JSON
-|--------------------------------------------------------------------------
-*/
+// Verifies a code and marks it used (one-time use). Returns { ok, reason }.
+export function verifyOtp(email, code) {
+  const row = db
+    .prepare(
+      `SELECT * FROM otp_codes WHERE email = ? AND code = ? AND used = 0 ORDER BY id DESC LIMIT 1`
+    )
+    .get(email, code);
 
-function safeJsonParse(value, fallback) {
-  try {
-    if (!value) {
-      return fallback;
-    }
-
-    return JSON.parse(value);
-  } catch {
-    return fallback;
+  if (!row) return { ok: false, reason: "الكود غلط." };
+  if (row.expires_at < Date.now()) {
+    return { ok: false, reason: "الكود منتهي — اطلب كود جديد." };
   }
+
+  db.prepare(`UPDATE otp_codes SET used = 1 WHERE id = ?`).run(row.id);
+  return { ok: true };
 }
 
-/*
-|--------------------------------------------------------------------------
-| OTP
-|--------------------------------------------------------------------------
-*/
+/* ---------------- Registrations ---------------- */
 
-export async function saveOtp(email, code, ttlMinutes = 10) {
-  await ensureDatabase();
-
-  const now = Date.now();
-  const expiresAt = now + ttlMinutes * 60 * 1000;
-
-  // Remove old OTPs for the same email.
-  await sql`
-    DELETE FROM otp_codes
-    WHERE email = ${email}
-  `;
-
-  await sql`
-    INSERT INTO otp_codes (
+// Saves the registration row AND the actual PDF file (decoded from the
+// "data:application/pdf;base64,...." string sent by the client), so the
+// admin page can download the exact document the student generated.
+export function saveRegistration(email, data, pdfBase64) {
+  const info = db
+    .prepare(
+      `INSERT INTO registrations (
+        email, title_ar, title_en, course_title, required_hours,
+        leader_name, leader_email, leader_phone, goal, ai_link, community_service,
+        abstract, keywords, supervisors, yn, team, schedule, software_tools,
+        hardware, budget, sponsors, pdf_filename, created_at
+      ) VALUES (?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?)`
+    )
+    .run(
       email,
-      code,
-      expires_at,
-      used,
-      created_at
-    )
-    VALUES (
-      ${email},
-      ${code},
-      ${expiresAt},
-      FALSE,
-      ${now}
-    )
-  `;
+      data.titleAr || "",
+      data.titleEn || "",
+      data.courseTitle || "",
+      data.requiredHours || null,
+      data.leaderName || "",
+      data.leaderEmail || "",
+      data.leaderPhone || "",
+      data.goal || "",
+      data.aiLink || "",
+      data.communityService || "",
+      data.abstract || "",
+      JSON.stringify(data.keywords || []),
+      JSON.stringify(data.supervisors || []),
+      JSON.stringify(data.yn || []),
+      JSON.stringify(data.team || []),
+      JSON.stringify(data.schedule || []),
+      JSON.stringify(data.sw || {}),
+      data.hardware || "",
+      JSON.stringify(data.budget || []),
+      JSON.stringify(data.sponsors || []),
+      null, // pdf_filename set below once we know the row's id
+      Date.now()
+    );
 
-  return true;
-}
-
-/*
-|--------------------------------------------------------------------------
-| Verify OTP
-|--------------------------------------------------------------------------
-*/
-
-export async function verifyOtp(email, code) {
-  await ensureDatabase();
-
-  const rows = await sql`
-    SELECT
-      id,
-      email,
-      code,
-      expires_at,
-      used,
-      created_at
-    FROM otp_codes
-    WHERE email = ${email}
-      AND code = ${code}
-      AND used = FALSE
-    ORDER BY id DESC
-    LIMIT 1
-  `;
-
-  const row = rows[0];
-
-  if (!row) {
-    return {
-      ok: false,
-      reason: "الكود غلط.",
-    };
-  }
-
-  if (Number(row.expires_at) < Date.now()) {
-    return {
-      ok: false,
-      reason: "الكود منتهي — اطلب كود جديد.",
-    };
-  }
-
-  await sql`
-    UPDATE otp_codes
-    SET used = TRUE
-    WHERE id = ${row.id}
-  `;
-
-  return {
-    ok: true,
-  };
-}
-
-/*
-|--------------------------------------------------------------------------
-| Save Registration
-|--------------------------------------------------------------------------
-|
-| Database:
-|   Neon PostgreSQL
-|
-| PDF:
-|   Vercel Blob
-|
-*/
-
-export async function saveRegistration(email, data, pdfBase64) {
-  await ensureDatabase();
-
-  const now = Date.now();
-
-  /*
-  |--------------------------------------------------------------------------
-  | 1. Insert registration first
-  |--------------------------------------------------------------------------
-  */
-
-  const inserted = await sql`
-    INSERT INTO registrations (
-      email,
-
-      title_ar,
-      title_en,
-      course_title,
-      required_hours,
-
-      leader_name,
-      leader_email,
-      leader_phone,
-
-      goal,
-      ai_link,
-      community_service,
-      abstract,
-
-      keywords,
-      supervisors,
-      yn,
-      team,
-      schedule,
-      software_tools,
-
-      hardware,
-      budget,
-      sponsors,
-
-      pdf_path,
-      created_at
-    )
-    VALUES (
-      ${email},
-
-      ${data.titleAr || ""},
-      ${data.titleEn || ""},
-      ${data.courseTitle || ""},
-      ${data.requiredHours || null},
-
-      ${data.leaderName || ""},
-      ${data.leaderEmail || ""},
-      ${data.leaderPhone || ""},
-
-      ${data.goal || ""},
-      ${data.aiLink || ""},
-      ${data.communityService || ""},
-      ${data.abstract || ""},
-
-      ${JSON.stringify(data.keywords || [])},
-      ${JSON.stringify(data.supervisors || [])},
-      ${JSON.stringify(data.yn || [])},
-      ${JSON.stringify(data.team || [])},
-      ${JSON.stringify(data.schedule || [])},
-      ${JSON.stringify(data.sw || {})},
-
-      ${data.hardware || ""},
-      ${JSON.stringify(data.budget || [])},
-      ${JSON.stringify(data.sponsors || [])},
-
-      ${null},
-      ${now}
-    )
-    RETURNING id
-  `;
-
-  const id = inserted[0]?.id;
-
-  if (!id) {
-    throw new Error("Failed to create registration record.");
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | 2. Upload PDF to Vercel Blob
-  |--------------------------------------------------------------------------
-  */
-
-  let pdfPath = null;
+  const id = info.lastInsertRowid;
 
   if (pdfBase64) {
-    const prefix = "data:application/pdf;base64,";
-
-    if (!String(pdfBase64).startsWith(prefix)) {
-      throw new Error("Invalid PDF data.");
+    try {
+      const base64Data = String(pdfBase64).split(",").pop();
+      const buffer = Buffer.from(base64Data, "base64");
+      const filename = `${id}.pdf`;
+      fs.writeFileSync(path.join(PDF_DIR, filename), buffer);
+      db.prepare(`UPDATE registrations SET pdf_filename = ? WHERE id = ?`).run(filename, id);
+    } catch (err) {
+      // A PDF write failure shouldn't lose the registration data itself.
+      console.error("[db] failed to save PDF file for registration", id, err);
     }
-
-    const base64Data = String(pdfBase64).slice(prefix.length);
-
-    const buffer = Buffer.from(base64Data, "base64");
-
-    const pathname = `registrations/${id}.pdf`;
-
-    const blob = await put(pathname, buffer, {
-      access: "private",
-      contentType: "application/pdf",
-      addRandomSuffix: false,
-    });
-
-    pdfPath = blob.pathname;
-
-    /*
-    |--------------------------------------------------------------------------
-    | 3. Save Blob pathname in database
-    |--------------------------------------------------------------------------
-    */
-
-    await sql`
-      UPDATE registrations
-      SET pdf_path = ${pdfPath}
-      WHERE id = ${id}
-    `;
   }
 
-  return {
-    id: String(id),
-    pdfPath,
-  };
+  return id;
 }
 
-/*
-|--------------------------------------------------------------------------
-| List Registrations
-|--------------------------------------------------------------------------
-*/
+export function listRegistrations() {
+  const rows = db
+    .prepare(`SELECT * FROM registrations ORDER BY created_at DESC`)
+    .all();
 
-export async function listRegistrations() {
-  await ensureDatabase();
-
-  const rows = await sql`
-    SELECT *
-    FROM registrations
-    ORDER BY created_at DESC
-  `;
-
-  return rows.map((row) => ({
-    id: String(row.id),
-
-    email: row.email,
-
-    title_ar: row.title_ar,
-    title_en: row.title_en,
-    course_title: row.course_title,
-    required_hours: row.required_hours,
-
-    leader_name: row.leader_name,
-    leader_email: row.leader_email,
-    leader_phone: row.leader_phone,
-
-    goal: row.goal,
-    ai_link: row.ai_link,
-    community_service: row.community_service,
-    abstract: row.abstract,
-
-    keywords: safeJsonParse(row.keywords, []),
-    supervisors: safeJsonParse(row.supervisors, []),
-    yn: safeJsonParse(row.yn, []),
-    team: safeJsonParse(row.team, []),
-    schedule: safeJsonParse(row.schedule, []),
-    software_tools: safeJsonParse(row.software_tools, {}),
-
-    hardware: row.hardware,
-    budget: safeJsonParse(row.budget, []),
-    sponsors: safeJsonParse(row.sponsors, []),
-
-    pdf_path: row.pdf_path,
-
-    created_at: row.created_at,
+  return rows.map((r) => ({
+    ...r,
+    keywords: JSON.parse(r.keywords || "[]"),
+    supervisors: JSON.parse(r.supervisors || "[]"),
+    yn: JSON.parse(r.yn || "[]"),
+    team: JSON.parse(r.team || "[]"),
+    schedule: JSON.parse(r.schedule || "[]"),
+    software_tools: JSON.parse(r.software_tools || "{}"),
+    budget: JSON.parse(r.budget || "[]"),
+    sponsors: JSON.parse(r.sponsors || "[]"),
   }));
 }
 
-/*
-|--------------------------------------------------------------------------
-| Get Registration PDF Path
-|--------------------------------------------------------------------------
-*/
-
-export async function getRegistrationPdfPath(id) {
-  await ensureDatabase();
-
-  const rows = await sql`
-    SELECT pdf_path
-    FROM registrations
-    WHERE id = ${id}
-    LIMIT 1
-  `;
-
-  const row = rows[0];
-
-  if (!row || !row.pdf_path) {
-    return null;
-  }
-
-  return row.pdf_path;
+// Returns the absolute path to a registration's stored PDF, or null if
+// there isn't one (e.g. the write failed at submission time).
+export function getRegistrationPdfPath(id) {
+  const row = db
+    .prepare(`SELECT pdf_filename FROM registrations WHERE id = ?`)
+    .get(id);
+  if (!row || !row.pdf_filename) return null;
+  const fullPath = path.join(PDF_DIR, row.pdf_filename);
+  return fs.existsSync(fullPath) ? fullPath : null;
 }
+
+export default db;
