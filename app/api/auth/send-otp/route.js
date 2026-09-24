@@ -1,4 +1,3 @@
-```javascript
 import crypto from "crypto";
 import nodemailer from "nodemailer";
 import { saveOtp } from "../../../lib/db";
@@ -241,4 +240,3 @@ export async function POST(request) {
     );
   }
 }
-```
