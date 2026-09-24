@@ -7,14 +7,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-/* =========================================================
-   HELPERS
-========================================================= */
-
 function clean(value) {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase();
+  return String(value ?? "").trim();
 }
 
 function getAllowedEmailDomain() {
@@ -26,25 +20,20 @@ function getAllowedEmailDomain() {
     .toLowerCase();
 }
 
-/* =========================================================
-   POST
-========================================================= */
-
 export async function POST(request) {
   try {
-    /* =====================================================
-       1. Parse request
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 1. Read JSON
+    |--------------------------------------------------------------------------
+    */
 
     let body;
 
     try {
       body = await request.json();
     } catch (error) {
-      console.error(
-        "[send-otp] Invalid JSON request:",
-        error
-      );
+      console.error("[send-otp] Invalid JSON:", error);
 
       return NextResponse.json(
         {
@@ -57,16 +46,27 @@ export async function POST(request) {
       );
     }
 
-    const email = clean(body?.email);
+    /*
+    |--------------------------------------------------------------------------
+    | 2. Email
+    |--------------------------------------------------------------------------
+    */
 
-    /* =====================================================
-       2. Validate email
-    ===================================================== */
+    const email = clean(body?.email).toLowerCase();
 
-    if (
-      !email ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-    ) {
+    if (!email) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "اكتب الإيميل الجامعي.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return NextResponse.json(
         {
           ok: false,
@@ -78,12 +78,13 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       3. Validate university domain
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 3. University Domain
+    |--------------------------------------------------------------------------
+    */
 
-    const allowedDomain =
-      getAllowedEmailDomain();
+    const allowedDomain = getAllowedEmailDomain();
 
     if (!email.endsWith(allowedDomain)) {
       return NextResponse.json(
@@ -97,34 +98,26 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       4. SMTP environment
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 4. SMTP
+    |--------------------------------------------------------------------------
+    */
 
-    const host =
-      process.env.SMTP_HOST?.trim();
-
-    const user =
-      process.env.SMTP_USER?.trim();
-
-    const pass =
-      process.env.SMTP_PASS?.trim();
+    const host = clean(process.env.SMTP_HOST);
+    const user = clean(process.env.SMTP_USER);
+    const pass = clean(process.env.SMTP_PASS);
 
     const port =
-      Number(
-        process.env.SMTP_PORT?.trim()
-      ) || 587;
+      Number(clean(process.env.SMTP_PORT)) || 587;
 
     if (!host || !user || !pass) {
-      console.error(
-        "[send-otp] Missing SMTP environment variables."
-      );
+      console.error("[send-otp] Missing SMTP configuration.");
 
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "الإيميل مش متظبط على السيرفر لسه.",
+          error: "الإيميل مش متظبط على السيرفر لسه.",
         },
         {
           status: 500,
@@ -132,43 +125,42 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       5. Generate OTP
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 5. Generate OTP
+    |--------------------------------------------------------------------------
+    */
 
-    const code =
-      crypto
-        .randomInt(
-          100000,
-          1000000
-        )
-        .toString();
+    const code = crypto
+      .randomInt(100000, 1000000)
+      .toString();
 
-    /* =====================================================
-       6. Create transporter
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 6. Transporter
+    |--------------------------------------------------------------------------
+    */
 
-    const transporter =
-      nodemailer.createTransport({
-        host,
-        port,
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
 
-        secure:
-          port === 465,
+      auth: {
+        user,
+        pass,
+      },
 
-        auth: {
-          user,
-          pass,
-        },
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
+    });
 
-        connectionTimeout: 15000,
-        greetingTimeout: 15000,
-        socketTimeout: 20000,
-      });
-
-    /* =====================================================
-       7. Verify SMTP
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 7. Verify SMTP
+    |--------------------------------------------------------------------------
+    */
 
     try {
       await transporter.verify();
@@ -181,8 +173,7 @@ export async function POST(request) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "مش قادر أتصل بخدمة الإيميل حاليًا.",
+          error: "مش قادر أتصل بخدمة الإيميل حاليًا.",
         },
         {
           status: 500,
@@ -190,127 +181,95 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       8. Send OTP
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 8. Send OTP
+    |--------------------------------------------------------------------------
+    */
 
     try {
       await transporter.sendMail({
-        from: `"تسجيل مشاريع AI Engineering" <${user}>`,
+        from: `"AI Engineering Registration" <${user}>`,
 
         to: email,
 
-        subject:
-          "كود التحقق — تسجيل مشروع التخرج",
-
-        text:
-          `كود التحقق الخاص بك هو: ${code}\n\n` +
-          `الكود صالح لمدة 10 دقائق.`,
+        subject: "كود التحقق — تسجيل مشروع التخرج",
 
         html: `
           <!DOCTYPE html>
-
           <html lang="ar" dir="rtl">
+            <head>
+              <meta charset="UTF-8" />
+            </head>
 
-          <head>
-            <meta charset="UTF-8" />
-
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1.0"
-            />
-
-            <title>
-              كود التحقق
-            </title>
-          </head>
-
-          <body
-            style="
-              margin:0;
-              padding:30px;
-              background:#f8fafc;
-              font-family:Tahoma,Arial,sans-serif;
-              color:#111827;
-            "
-          >
-
-            <div
+            <body
               style="
-                max-width:600px;
-                margin:auto;
-                background:#ffffff;
-                border-radius:14px;
+                margin:0;
                 padding:30px;
-                border:1px solid #e5e7eb;
+                background:#f8fafc;
+                font-family:Tahoma,Arial,sans-serif;
               "
             >
 
-              <h2
-                style="
-                  color:#06265b;
-                  margin-top:0;
-                "
-              >
-                تأكيد الإيميل الجامعي
-              </h2>
-
-              <p>
-                أهلًا،
-              </p>
-
-              <p>
-                استخدم كود التحقق التالي
-                لإكمال تسجيل مشروع التخرج:
-              </p>
-
               <div
                 style="
-                  text-align:center;
-                  margin:30px 0;
+                  max-width:600px;
+                  margin:auto;
+                  background:#ffffff;
+                  border-radius:12px;
+                  padding:30px;
+                  border:1px solid #e5e7eb;
                 "
               >
+
+                <h2 style="color:#06265b;">
+                  تأكيد الإيميل الجامعي
+                </h2>
+
+                <p>
+                  أهلًا،
+                </p>
+
+                <p>
+                  استخدم كود التحقق التالي لإكمال
+                  تسجيل مشروع التخرج:
+                </p>
 
                 <div
                   style="
-                    display:inline-block;
-                    background:#f1f5f9;
-                    padding:20px 30px;
-                    border-radius:12px;
-                    font-size:32px;
+                    font-size:34px;
                     font-weight:900;
                     letter-spacing:8px;
                     color:#06265b;
+                    margin:30px 0;
+                    text-align:center;
                   "
                 >
                   ${code}
                 </div>
 
+                <p
+                  style="
+                    color:#777;
+                    font-size:13px;
+                  "
+                >
+                  الكود صالح لمدة 10 دقائق فقط.
+                </p>
+
+                <p
+                  style="
+                    color:#777;
+                    font-size:13px;
+                  "
+                >
+                  إذا لم تطلب هذا الكود،
+                  يمكنك تجاهل الرسالة.
+                </p>
+
               </div>
 
-              <p
-                style="
-                  color:#64748b;
-                  font-size:13px;
-                "
-              >
-                الكود صالح لمدة 10 دقائق فقط.
-              </p>
-
-              <p
-                style="
-                  color:#64748b;
-                  font-size:13px;
-                "
-              >
-                إذا لم تطلب هذا الكود،
-                يمكنك تجاهل هذه الرسالة.
-              </p>
-
-            </div>
-
-          </body>
-
+            </body>
           </html>
         `,
       });
@@ -323,8 +282,7 @@ export async function POST(request) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "فشل إرسال الإيميل. حاول مرة أخرى.",
+          error: "فشل إرسال الإيميل. حاول مرة أخرى.",
         },
         {
           status: 500,
@@ -332,16 +290,14 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       9. Save OTP
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 9. Save OTP
+    |--------------------------------------------------------------------------
+    */
 
     try {
-      await saveOtp(
-        email,
-        code,
-        10
-      );
+      await saveOtp(email, code, 10);
     } catch (error) {
       console.error(
         "[send-otp] saveOtp failed:",
@@ -360,9 +316,11 @@ export async function POST(request) {
       );
     }
 
-    /* =====================================================
-       10. Success
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 10. Success
+    |--------------------------------------------------------------------------
+    */
 
     return NextResponse.json(
       {
@@ -372,10 +330,8 @@ export async function POST(request) {
       },
       {
         status: 200,
-
         headers: {
-          "Cache-Control":
-            "no-store, no-cache, must-revalidate",
+          "Cache-Control": "no-store",
         },
       }
     );
@@ -393,10 +349,8 @@ export async function POST(request) {
       },
       {
         status: 500,
-
         headers: {
-          "Cache-Control":
-            "no-store",
+          "Cache-Control": "no-store",
         },
       }
     );
