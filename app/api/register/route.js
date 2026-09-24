@@ -1,22 +1,24 @@
 import nodemailer from "nodemailer";
 import { cookies } from "next/headers";
-import {
-  verifySessionToken,
-} from "../../lib/session";
-import {
-  saveRegistration,
-} from "../../lib/db";
+import { verifySessionToken } from "../../lib/session";
+import { saveRegistration } from "../../lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MAX_PDF_SIZE =
-  10 * 1024 * 1024;
+/*
+|--------------------------------------------------------------------------
+| Vercel Functions have a request body limit.
+|
+| Because the current frontend sends the PDF as Base64 inside JSON,
+| keep the PDF below 3MB for safety.
+|
+| For PDFs larger than this, use direct client-side Blob upload.
+|--------------------------------------------------------------------------
+*/
 
-/* =========================================================
-   HELPERS
-========================================================= */
+const MAX_PDF_SIZE = 3 * 1024 * 1024;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -31,15 +33,14 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-/* =========================================================
-   VALIDATE REGISTRATION
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| Validate Registration
+|--------------------------------------------------------------------------
+*/
 
 function validateRegistration(data) {
-  if (
-    !data ||
-    typeof data !== "object"
-  ) {
+  if (!data || typeof data !== "object") {
     return "بيانات التسجيل غير صحيحة.";
   }
 
@@ -52,28 +53,18 @@ function validateRegistration(data) {
     ["leaderPhone", "رقم الهاتف"],
     ["goal", "هدف المشروع"],
     ["aiLink", "ربط المشروع بالتخصص"],
-    [
-      "communityService",
-      "الخدمة المجتمعية",
-    ],
+    ["communityService", "الخدمة المجتمعية"],
   ];
 
-  for (
-    const [field, label]
-    of requiredFields
-  ) {
+  for (const [field, label] of requiredFields) {
     if (!clean(data[field])) {
       return `برجاء إدخال ${label}.`;
     }
   }
 
-  const email =
-    clean(data.leaderEmail);
+  const email = clean(data.leaderEmail);
 
-  const emailRegex =
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-  if (!emailRegex.test(email)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return "إيميل قائد الفريق غير صحيح.";
   }
 
@@ -81,19 +72,11 @@ function validateRegistration(data) {
     return "بيانات الفريق غير صحيحة.";
   }
 
-  if (
-    !Array.isArray(
-      data.supervisors
-    )
-  ) {
+  if (!Array.isArray(data.supervisors)) {
     return "بيانات المشرفين غير صحيحة.";
   }
 
-  if (
-    !Array.isArray(
-      data.keywords
-    )
-  ) {
+  if (!Array.isArray(data.keywords)) {
     return "الكلمات المفتاحية غير صحيحة.";
   }
 
@@ -101,20 +84,12 @@ function validateRegistration(data) {
     return "عدد أعضاء الفريق أكبر من الحد المسموح.";
   }
 
-  if (
-    data.supervisors.length >
-    10
-  ) {
+  if (data.supervisors.length > 10) {
     return "عدد المشرفين أكبر من الحد المسموح.";
   }
 
-  for (
-    const member of data.team
-  ) {
-    if (
-      !member ||
-      typeof member !== "object"
-    ) {
+  for (const member of data.team) {
+    if (!member || typeof member !== "object") {
       return "بيانات أحد أعضاء الفريق غير صحيحة.";
     }
 
@@ -126,9 +101,11 @@ function validateRegistration(data) {
   return null;
 }
 
-/* =========================================================
-   VALIDATE PDF
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| Validate PDF
+|--------------------------------------------------------------------------
+*/
 
 function validatePdf(pdfBase64) {
   if (
@@ -141,32 +118,23 @@ function validatePdf(pdfBase64) {
   const prefix =
     "data:application/pdf;base64,";
 
-  if (
-    !pdfBase64.startsWith(prefix)
-  ) {
+  if (!pdfBase64.startsWith(prefix)) {
     return "الملف المرفوع يجب أن يكون PDF صالحًا.";
   }
 
   const base64Data =
-    pdfBase64.slice(
-      prefix.length
-    );
+    pdfBase64.slice(prefix.length);
 
   if (!base64Data) {
     return "ملف PDF فارغ.";
   }
 
-  const estimatedSize =
-    Math.floor(
-      (base64Data.length * 3) /
-        4
-    );
+  const estimatedSize = Math.floor(
+    (base64Data.length * 3) / 4
+  );
 
-  if (
-    estimatedSize >
-    MAX_PDF_SIZE
-  ) {
-    return "حجم ملف PDF يجب ألا يتجاوز 10MB.";
+  if (estimatedSize > MAX_PDF_SIZE) {
+    return "حجم ملف PDF يجب ألا يتجاوز 3MB حاليًا.";
   }
 
   if (
@@ -180,9 +148,11 @@ function validatePdf(pdfBase64) {
   return null;
 }
 
-/* =========================================================
-   TEAM HTML
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| Team HTML
+|--------------------------------------------------------------------------
+*/
 
 function buildTeamHtml(team) {
   if (
@@ -193,28 +163,26 @@ function buildTeamHtml(team) {
   }
 
   return team
-    .filter(
-      (member) =>
-        clean(member?.name)
+    .filter((member) =>
+      clean(member?.name)
     )
     .map((member) => {
-      const name =
-        escapeHtml(member.name);
+      const name = escapeHtml(
+        member.name
+      );
 
       const hours =
-        escapeHtml(
-          member.hours
-        ) || "?";
+        escapeHtml(member.hours) || "?";
 
       const gpa =
-        escapeHtml(
-          member.gpa
-        ) || "?";
+        escapeHtml(member.gpa) || "?";
 
       return `
         <li>
-          ${name} —
-          ${hours} ساعة معتمدة —
+          ${name}
+          —
+          ${hours} ساعة معتمدة
+          —
           GPA ${gpa}
         </li>
       `;
@@ -222,43 +190,40 @@ function buildTeamHtml(team) {
     .join("");
 }
 
-/* =========================================================
-   SUPERVISORS HTML
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| Supervisors HTML
+|--------------------------------------------------------------------------
+*/
 
-function buildSupervisorsHtml(
-  supervisors
-) {
+function buildSupervisorsHtml(supervisors) {
   if (
-    !Array.isArray(
-      supervisors
-    ) ||
+    !Array.isArray(supervisors) ||
     supervisors.length === 0
   ) {
     return "<li>—</li>";
   }
 
-  const items =
-    supervisors
-      .filter(Boolean)
-      .map(
-        (supervisor) =>
-          `<li>${escapeHtml(
-            supervisor
-          )}</li>`
-      )
-      .join("");
+  const items = supervisors
+    .filter(Boolean)
+    .map(
+      (supervisor) =>
+        `<li>${escapeHtml(
+          supervisor
+        )}</li>`
+    )
+    .join("");
 
   return items || "<li>—</li>";
 }
 
-/* =========================================================
-   KEYWORDS HTML
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| Keywords HTML
+|--------------------------------------------------------------------------
+*/
 
-function buildKeywordsHtml(
-  keywords
-) {
+function buildKeywordsHtml(keywords) {
   if (
     !Array.isArray(keywords) ||
     keywords.length === 0
@@ -268,47 +233,33 @@ function buildKeywordsHtml(
 
   return keywords
     .filter(Boolean)
-    .map(
-      (keyword) =>
-        escapeHtml(keyword)
+    .map((keyword) =>
+      escapeHtml(keyword)
     )
     .join("، ");
 }
 
-/* =========================================================
-   EMAIL HTML
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| Email HTML
+|--------------------------------------------------------------------------
+*/
 
 function buildEmailHtml(
   data,
   sessionEmail
 ) {
-  const teamHtml =
-    buildTeamHtml(data.team);
-
-  const supervisorsHtml =
-    buildSupervisorsHtml(
-      data.supervisors
-    );
-
-  const keywordsHtml =
-    buildKeywordsHtml(
-      data.keywords
-    );
-
   return `
     <!DOCTYPE html>
 
     <html lang="ar" dir="rtl">
 
       <head>
-
         <meta charset="UTF-8" />
 
         <title>
           تسجيل مشروع تخرج جديد
         </title>
-
       </head>
 
       <body
@@ -347,8 +298,7 @@ function buildEmailHtml(
               margin-top:0;
             "
           >
-            وصل تسجيل جديد من صفحة
-            Project Registration
+            وصل تسجيل جديد من صفحة Project Registration
           </p>
 
           <hr
@@ -498,49 +448,43 @@ function buildEmailHtml(
               </td>
 
               <td style="padding:8px 0;">
-                ${keywordsHtml}
+                ${buildKeywordsHtml(
+                  data.keywords
+                )}
               </td>
             </tr>
 
           </table>
 
-          <div
-            style="
-              margin-top:25px;
-            "
-          >
+          <div style="margin-top:25px;">
 
             <h3>
               👨‍🏫 فريق الإشراف
             </h3>
 
             <ul>
-              ${supervisorsHtml}
+              ${buildSupervisorsHtml(
+                data.supervisors
+              )}
             </ul>
 
           </div>
 
-          <div
-            style="
-              margin-top:25px;
-            "
-          >
+          <div style="margin-top:25px;">
 
             <h3>
               👥 فريق المشروع
             </h3>
 
             <ul>
-              ${teamHtml}
+              ${buildTeamHtml(
+                data.team
+              )}
             </ul>
 
           </div>
 
-          <div
-            style="
-              margin-top:25px;
-            "
-          >
+          <div style="margin-top:25px;">
 
             <h3>
               🎯 الهدف من المشروع
@@ -558,11 +502,7 @@ function buildEmailHtml(
 
           </div>
 
-          <div
-            style="
-              margin-top:25px;
-            "
-          >
+          <div style="margin-top:25px;">
 
             <h3>
               🤖 ربط المشروع بتخصص الذكاء الاصطناعي
@@ -580,11 +520,7 @@ function buildEmailHtml(
 
           </div>
 
-          <div
-            style="
-              margin-top:25px;
-            "
-          >
+          <div style="margin-top:25px;">
 
             <h3>
               🌍 ربط المشروع بالخدمة المجتمعية
@@ -623,39 +559,28 @@ function buildEmailHtml(
   `;
 }
 
-/* =========================================================
-   SMTP
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| SMTP
+|--------------------------------------------------------------------------
+*/
 
 function createTransporter() {
   const host =
-    clean(
-      process.env.SMTP_HOST
-    );
+    clean(process.env.SMTP_HOST);
 
   const user =
-    clean(
-      process.env.SMTP_USER
-    );
+    clean(process.env.SMTP_USER);
 
   const pass =
-    clean(
-      process.env.SMTP_PASS
-    );
-
-  const rawPort =
-    clean(
-      process.env.SMTP_PORT
-    );
+    clean(process.env.SMTP_PASS);
 
   const port =
-    Number(rawPort) || 587;
+    Number(
+      clean(process.env.SMTP_PORT)
+    ) || 587;
 
-  if (
-    !host ||
-    !user ||
-    !pass
-  ) {
+  if (!host || !user || !pass) {
     throw new Error(
       "SMTP configuration is missing."
     );
@@ -663,7 +588,6 @@ function createTransporter() {
 
   return nodemailer.createTransport({
     host,
-
     port,
 
     secure:
@@ -680,17 +604,19 @@ function createTransporter() {
   });
 }
 
-/* =========================================================
-   POST
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| POST
+|--------------------------------------------------------------------------
+*/
 
-export async function POST(
-  request
-) {
+export async function POST(request) {
   try {
-    /* =====================================================
-       1. Verify Session
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 1. Verify Session
+    |--------------------------------------------------------------------------
+    */
 
     const cookieStore =
       await cookies();
@@ -724,7 +650,7 @@ export async function POST(
         {
           ok: false,
           error:
-            "جلسة التحقق غير صالحة أو منتهية. تحقق من الإيميل مرة أخرى.",
+            "جلسة التحقق غير صالحة أو منتهية.",
         },
         {
           status: 401,
@@ -732,16 +658,22 @@ export async function POST(
       );
     }
 
-    /* =====================================================
-       2. Parse Request
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 2. Parse Body
+    |--------------------------------------------------------------------------
+    */
 
     let body;
 
     try {
-      body =
-        await request.json();
-    } catch {
+      body = await request.json();
+    } catch (error) {
+      console.error(
+        "[register] Invalid JSON:",
+        error
+      );
+
       return Response.json(
         {
           ok: false,
@@ -759,21 +691,20 @@ export async function POST(
       pdfBase64,
     } = body || {};
 
-    /* =====================================================
-       3. Validate
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 3. Validate Registration
+    |--------------------------------------------------------------------------
+    */
 
     const validationError =
-      validateRegistration(
-        data
-      );
+      validateRegistration(data);
 
     if (validationError) {
       return Response.json(
         {
           ok: false,
-          error:
-            validationError,
+          error: validationError,
         },
         {
           status: 400,
@@ -781,14 +712,14 @@ export async function POST(
       );
     }
 
-    /* =====================================================
-       4. Validate PDF
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 4. Validate PDF
+    |--------------------------------------------------------------------------
+    */
 
     const pdfError =
-      validatePdf(
-        pdfBase64
-      );
+      validatePdf(pdfBase64);
 
     if (pdfError) {
       return Response.json(
@@ -802,19 +733,19 @@ export async function POST(
       );
     }
 
-    /* =====================================================
-       5. Verify Leader Email
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 5. Verify Leader Email
+    |--------------------------------------------------------------------------
+    */
 
     const verifiedEmail =
-      clean(
-        session.email
-      ).toLowerCase();
+      clean(session.email)
+        .toLowerCase();
 
     const leaderEmail =
-      clean(
-        data.leaderEmail
-      ).toLowerCase();
+      clean(data.leaderEmail)
+        .toLowerCase();
 
     if (
       verifiedEmail !==
@@ -832,9 +763,11 @@ export async function POST(
       );
     }
 
-    /* =====================================================
-       6. Admin Email
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 6. Admin Email
+    |--------------------------------------------------------------------------
+    */
 
     const adminEmail =
       clean(
@@ -843,14 +776,14 @@ export async function POST(
 
     if (!adminEmail) {
       console.error(
-        "[register] ADMIN_EMAIL is missing."
+        "[register] ADMIN_EMAIL missing."
       );
 
       return Response.json(
         {
           ok: false,
           error:
-            "خدمة التسجيل غير متاحة حاليًا. حاول مرة أخرى لاحقًا.",
+            "خدمة التسجيل غير متاحة حاليًا.",
         },
         {
           status: 500,
@@ -858,9 +791,131 @@ export async function POST(
       );
     }
 
-    /* =====================================================
-       7. Filename
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 7. Save Registration + PDF
+    |--------------------------------------------------------------------------
+    */
+
+    let registration;
+
+    try {
+      registration =
+        await saveRegistration(
+          session.email,
+          data,
+          pdfBase64
+        );
+    } catch (error) {
+      console.error(
+        "[register] Database / Blob error:",
+        error
+      );
+
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "حدث خطأ أثناء حفظ بيانات التسجيل. حاول مرة أخرى.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    const registrationId =
+      registration?.id ||
+      `REG-${Date.now()}`;
+
+    /*
+    |--------------------------------------------------------------------------
+    | 8. Email HTML
+    |--------------------------------------------------------------------------
+    */
+
+    const html =
+      buildEmailHtml(
+        data,
+        session.email
+      );
+
+    /*
+    |--------------------------------------------------------------------------
+    | 9. SMTP
+    |--------------------------------------------------------------------------
+    */
+
+    let transporter;
+
+    try {
+      transporter =
+        createTransporter();
+    } catch (error) {
+      console.error(
+        "[register] SMTP configuration error:",
+        error
+      );
+
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "تم حفظ التسجيل، لكن إعداد البريد الإلكتروني غير صحيح.",
+          registrationId,
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | 10. Verify SMTP
+    |--------------------------------------------------------------------------
+    */
+
+    try {
+      await transporter.verify();
+    } catch (error) {
+      console.error(
+        "[register] SMTP verify failed:",
+        error
+      );
+
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "تم حفظ التسجيل، لكن حدث خطأ أثناء الاتصال بالبريد الإلكتروني.",
+          registrationId,
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | 11. Decode PDF for Email
+    |--------------------------------------------------------------------------
+    */
+
+    const prefix =
+      "data:application/pdf;base64,";
+
+    const base64Data =
+      pdfBase64.slice(
+        prefix.length
+      );
+
+    /*
+    |--------------------------------------------------------------------------
+    | 12. Filename
+    |--------------------------------------------------------------------------
+    */
 
     const safeName =
       clean(data.titleEn)
@@ -879,119 +934,11 @@ export async function POST(
     const filename =
       `${safeName}_Registration.pdf`;
 
-    /* =====================================================
-       8. Save Registration + PDF
-    ===================================================== */
-
-    let registration;
-
-    try {
-      registration =
-        await saveRegistration(
-          session.email,
-          data,
-          pdfBase64
-        );
-    } catch (error) {
-      console.error(
-        "[register] Database save failed:",
-        error
-      );
-
-      return Response.json(
-        {
-          ok: false,
-          error:
-            "حدث خطأ أثناء حفظ بيانات التسجيل.",
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    const registrationId =
-      registration?.id ||
-      `REG-${Date.now()}`;
-
-    /* =====================================================
-       9. Build Email
-    ===================================================== */
-
-    const html =
-      buildEmailHtml(
-        data,
-        session.email
-      );
-
-    /* =====================================================
-       10. SMTP
-    ===================================================== */
-
-    let transporter;
-
-    try {
-      transporter =
-        createTransporter();
-    } catch (error) {
-      console.error(
-        "[register] SMTP configuration error:",
-        error
-      );
-
-      return Response.json(
-        {
-          ok: false,
-          error:
-            "تم حفظ التسجيل، لكن إعدادات البريد الإلكتروني غير مكتملة.",
-          registrationId,
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    /* =====================================================
-       11. Verify SMTP
-    ===================================================== */
-
-    try {
-      await transporter.verify();
-    } catch (smtpError) {
-      console.error(
-        "[register] SMTP verification failed:",
-        smtpError
-      );
-
-      return Response.json(
-        {
-          ok: false,
-          error:
-            "تم حفظ التسجيل، لكن حدث خطأ أثناء الاتصال بخدمة البريد.",
-          registrationId,
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    /* =====================================================
-       12. Prepare PDF Attachment
-    ===================================================== */
-
-    const prefix =
-      "data:application/pdf;base64,";
-
-    const base64Data =
-      pdfBase64.slice(
-        prefix.length
-      );
-
-    /* =====================================================
-       13. Send Email
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 13. Send Email
+    |--------------------------------------------------------------------------
+    */
 
     try {
       await transporter.sendMail({
@@ -1028,10 +975,10 @@ export async function POST(
           },
         ],
       });
-    } catch (emailError) {
+    } catch (error) {
       console.error(
         "[register] Email sending failed:",
-        emailError
+        error
       );
 
       return Response.json(
@@ -1047,9 +994,11 @@ export async function POST(
       );
     }
 
-    /* =====================================================
-       14. Success
-    ===================================================== */
+    /*
+    |--------------------------------------------------------------------------
+    | 14. Success
+    |--------------------------------------------------------------------------
+    */
 
     return Response.json(
       {
@@ -1062,16 +1011,11 @@ export async function POST(
       },
       {
         status: 200,
-
-        headers: {
-          "Cache-Control":
-            "no-store",
-        },
       }
     );
   } catch (error) {
     console.error(
-      "[register] Unexpected server error:",
+      "[register] Unexpected error:",
       error
     );
 
