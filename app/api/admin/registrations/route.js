@@ -1,26 +1,23 @@
-import {
-  listRegistrations,
-} from "../../../lib/db";
+import { listRegistrations } from "../../../lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  request
-) {
-  try {
-    /* =====================================================
-       Authentication
-    ===================================================== */
+function getAdminPassword(request) {
+  return (
+    request.headers.get(
+      "x-admin-password"
+    ) || ""
+  );
+}
 
+export async function GET(request) {
+  try {
     const auth =
-      request.headers.get(
-        "x-admin-password"
-      ) || "";
+      getAdminPassword(request);
 
     const expected =
-      process.env.ADMIN_PASSWORD ||
-      "";
+      process.env.ADMIN_PASSWORD || "";
 
     if (!expected) {
       return Response.json(
@@ -35,7 +32,10 @@ export async function GET(
       );
     }
 
-    if (auth !== expected) {
+    if (
+      !auth ||
+      auth !== expected
+    ) {
       return Response.json(
         {
           ok: false,
@@ -47,10 +47,6 @@ export async function GET(
       );
     }
 
-    /* =====================================================
-       Database
-    ===================================================== */
-
     const registrations =
       await listRegistrations();
 
@@ -61,7 +57,6 @@ export async function GET(
       },
       {
         status: 200,
-
         headers: {
           "Cache-Control":
             "no-store",
